@@ -174,8 +174,22 @@ def save_token(access_token: str, expires_in: int) -> None:
         "access_token": access_token,
         "expires_at": time.time() + expires_in,
     }))
-    TOKEN_PATH.chmod(0o600)
+    try:
+        TOKEN_PATH.chmod(0o600)
+    except (NotImplementedError, OSError):
+        pass  # Windows: POSIX 권한 미지원. .gitignore + 단일 사용자 PC 전제로 대체
 ```
+
+### 2.4 IP 화이트리스트
+
+토스증권 Open API 콘솔은 클라이언트별로 **허용 IP 목록**을 관리한다. 목록에 없는 IP에서의 요청은 토큰이 유효해도 거부된다.
+
+| # | 규칙 |
+|---|---|
+| A7 | 개발 PC의 현재 공인 IP를 콘솔의 IP 화이트리스트에 등록해야 한다. 미등록 시 `/oauth2/token`부터 실패한다 |
+| A8 | 개발 환경이 유동 IP(카페·공용 와이파이 등)라면 IP가 바뀔 때마다 재등록이 필요하다. 재등록 전까지는 목업 폴백 경로만 동작한다 |
+
+> 이 프로젝트는 고정 IP 환경에서 개발되며, IP는 이미 등록 완료된 상태다 (2026-08-26 확인).
 
 ---
 
@@ -846,7 +860,7 @@ DELETE /api/v1/conditional-orders/{id}                  조건주문 취소
 ### 15.1 호출 계약
 
 ```python
-MODEL = "claude-sonnet-4-6"
+MODEL = "claude-sonnet-5"
 TIMEOUT_SECONDS = 10
 MAX_TOKENS = 500
 

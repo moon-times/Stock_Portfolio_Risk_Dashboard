@@ -297,6 +297,8 @@ USE_MOCK_DATA=false
 | S5 | 주문·조건주문 엔드포인트는 클라이언트에 **구현하지 않는다** (조회 전용). 금지 목록은 API_DESIGN §13 |
 | S6 | `data/cache/token.json`은 권한 `0600`, `.gitignore` 필수. access token은 자격증명과 동등하게 취급한다 |
 
+> **Windows 메모 (2026-08-26)**: `chmod(0o600)`은 POSIX 전용 API라 Windows에서는 효과가 없다. `try/except`로 감싸 조용히 무시하고, 실질 보호는 `.gitignore` + CON-04(단일 사용자 로컬 PC 전제)에 의존한다. 상세 코드는 `API_DESIGN.md §2.3`.
+
 ### 5.3 설정 로더
 
 ```python

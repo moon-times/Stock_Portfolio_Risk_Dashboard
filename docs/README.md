@@ -39,11 +39,13 @@ UI 레퍼런스: [assets/dashboard_mockup.png](assets/dashboard_mockup.png)
 
 ## 구현 시작 전 확인
 
-| # | 확인 사항 | 문서 |
-|---|---|---|
-| 1 | `.env` 생성 및 `TOSS_CLIENT_ID` / `TOSS_CLIENT_SECRET` 입력 | TRD §5.1 |
-| 2 | Python 3.11+ 환경 확인 | TRD §2.1 |
-| 3 | `API_DESIGN.md §2.3` (토큰 단일성 제약) 숙지 — 가장 중요 | API_DESIGN §2.3 |
+| # | 확인 사항 | 상태 | 문서 |
+|---|---|---|---|
+| 1 | `.env` 생성 및 `TOSS_CLIENT_ID` / `TOSS_CLIENT_SECRET` 입력 | ✅ 발급 완료 (2026-08-26, 활성) | TRD §5.1 |
+| 2 | 토스증권 콘솔 IP 화이트리스트에 개발 PC IP 등록 | ✅ 등록 완료 | API_DESIGN §2.4 |
+| 3 | `ANTHROPIC_API_KEY` 준비 | ✅ 준비 완료 | TRD §5.1 |
+| 4 | Python 3.11+ 환경 확인 | 확인 필요 | TRD §2.1 |
+| 5 | `API_DESIGN.md §2.3` (토큰 단일성 제약) 숙지 — 가장 중요 | 필독 | API_DESIGN §2.3 |
 
 ---
 
@@ -89,6 +91,18 @@ UI 레퍼런스: [assets/dashboard_mockup.png](assets/dashboard_mockup.png)
 
 ---
 
+## 발표 전략 (2026-08-26 확정)
+
+실계좌는 VOO(해외 ETF) 단일 종목 + 현금만 보유 — 자산군이 사실상 1개라 상관관계 히트맵(발표 핵심 장면)을 실계좌로는 재현할 수 없다.
+
+| 항목 | 결정 | 근거 |
+|---|---|---|
+| 발표 메인 시연 | **샘플 데이터**(`data/sample_portfolio.json`) 기준으로 진행. 국내/해외/채권/현금/원자재 5개 자산군 + 상관관계 히트맵으로 "종목 수 ≠ 분산" 서사 전달 | 실계좌로는 다중 자산군 서사 재현 불가 |
+| 실계좌 연동 | 보조 시연. "실제 내 계좌에도 붙는다"는 것만 짧게 보여줌 (`USE_CASES.md` 부록B 3:45~4:15) | 기술적 완성도 어필. 투자 결정을 발표용으로 왜곡하지 않음 |
+| 우선순위 조정 | 상관관계 히트맵(FR-501~504, 문서상 P1)은 샘플 데이터 경로에서 **사실상 필수**로 취급. 벤치마크 비교 차트(FR-601~603)는 원래대로 P1 유지 | 시간이 부족해지면 벤치마크 차트부터 드롭 |
+
+---
+
 ## 알려진 단순화
 
 구현 시 README에 명시할 것.
@@ -100,6 +114,7 @@ UI 레퍼런스: [assets/dashboard_mockup.png](assets/dashboard_mockup.png)
 | 비중 | 현재 비중을 과거 전 기간에 고정 (buy-and-hold 가정). 거래내역 조회는 범위 밖 | DATA_DESIGN §4.7 |
 | ETF 분류 | `securityType`이 ETF의 기초자산을 알려주지 않아 종목명 키워드로 하위 분류 | DATA_DESIGN §5.1 |
 | 계산 기간 | 최근 126 거래일 고정 (캔들 1회 호출로 커버) | PRD Q3 |
+| 토큰 파일 권한 | Windows에서는 `chmod(0o600)`이 강제되지 않는다 (POSIX 전용 API). `try/except`로 감싸 조용히 스킵하고, 보안은 `.gitignore` + 단일 사용자 PC 전제에 의존한다 | API_DESIGN §2.3, NFR-306 |
 
 ---
 
