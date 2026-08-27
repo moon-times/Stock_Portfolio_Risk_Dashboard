@@ -25,6 +25,9 @@ Audit techniques that have each caught a real defect in this repo. Run all of th
 
 7. **Run the project's own linter (`.venv/Scripts/python -m ruff check <new files>`).** Added Phase 4: ruff is in `requirements.txt` but appears never to be run. On `api/mock_client.py` it caught `DTZ005` (`datetime.now()` without tz) in one second — a finding I would otherwise have had to argue for. Cheap, zero false positives so far.
    - Phase 4 nodeids diff was clean (no deleted tests) — the weakened-test pattern did **not** recur, though only 5 tests were written at all.
+   - Phase 5 nodeids diff also clean, and all 15 TDD_PLAN-mandated T-5.1/5.2/5.3 cases were present verbatim. Two clean phases in a row — the weakened-test pattern now looks resolved; keep checking, but stop treating it as the likeliest failure mode.
+
+8. **Coverage's one *missed* line is the highest-value line to read.** Added Phase 5: `api/throttle.py` hit 98%, and the single uncovered line was `time.sleep(self._min_interval - gap)` — the spacing mechanism that FR-201b actually depends on. Both tests exercising that path had passed `min_interval=0.0` to switch it off. A near-100% number with one miss is a pointer, not noise.
 
 **Why:** the project mandates 엄격 TDD for `models/` and `analytics/`, and gates are defined as "명령을 실행해서 참/거짓이 나와야 한다" — a gate that only passes under a non-canonical invocation, or against tests reshaped to fit the implementation, defeats that definition.
 

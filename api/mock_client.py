@@ -1,6 +1,5 @@
 import json
 import logging
-import time
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -10,6 +9,7 @@ import httpx
 import pandas as pd
 from pydantic import ValidationError
 
+from api import token_store
 from config import Settings
 from config import settings as default_settings
 from models.holding import Holding
@@ -19,8 +19,6 @@ from models.stock_meta import StockMeta
 logger = logging.getLogger(__name__)
 
 DEFAULT_SAMPLE_PATH = Path("data/sample_portfolio.json")
-TOKEN_PATH = Path("data/cache/token.json")
-SAFETY_MARGIN = 60
 MIN_VALID_PRICE_ROWS = 30
 _TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 _KST = ZoneInfo("Asia/Seoul")
@@ -29,30 +27,6 @@ _KST = ZoneInfo("Asia/Seoul")
 # (AUTH 레이트리밋 소모 방지). 종목별로 개별 재시도하면 20종목 조회 시
 # 발급 실패 하나가 20번의 낭비 호출로 증폭된다.
 _token_fetch_failed = False
-
-
-def _load_cached_token() -> str | None:
-    try:
-        d = json.loads(TOKEN_PATH.read_text())
-        if not isinstance(d, dict):
-            return None
-        if time.time() < float(d["expires_at"]) - SAFETY_MARGIN:
-            return d["access_token"]
-    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-        pass
-    return None
-
-
-def _save_token(access_token: str, expires_in: float) -> None:
-    TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-    TOKEN_PATH.write_text(json.dumps({
-        "access_token": access_token,
-        "expires_at": time.time() + float(expires_in),
-    }))
-    try:
-        TOKEN_PATH.chmod(0o600)
-    except (NotImplementedError, OSError):
-        pass  # Windows: POSIX 권한 미지원
 
 
 def _fetch_new_token(cfg: Settings) -> str | None:
@@ -71,7 +45,7 @@ def _fetch_new_token(cfg: Settings) -> str | None:
         )
         resp.raise_for_status()
         body = resp.json()
-        _save_token(body["access_token"], body["expires_in"])
+        token_store.save_token(body["access_token"], body["expires_in"])
         return body["access_token"]
     except (httpx.HTTPError, KeyError, TypeError, ValueError) as e:
         logger.warning("토큰 발급 실패, 이번 프로세스에서는 재시도하지 않음: %s", type(e).__name__)
@@ -80,7 +54,7 @@ def _fetch_new_token(cfg: Settings) -> str | None:
 
 
 def _get_token(cfg: Settings) -> str | None:
-    return _load_cached_token() or _fetch_new_token(cfg)
+    return token_store.load_token() or _fetch_new_token(cfg)
 
 
 def _get_market_data(cfg: Settings, path: str, params: dict) -> dict | None:

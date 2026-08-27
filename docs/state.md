@@ -1,4 +1,4 @@
-# 세션 상태 — 2026-08-27 (Phase 0 / Phase S / Phase 1 / Phase 2 / Phase 3 / Phase 4 완료, phase-inspector 검토·보정 반영)
+# 세션 상태 — 2026-08-27 (Phase 0 / Phase S / Phase 1 / Phase 2 / Phase 3 / Phase 4 / Phase 5 완료, phase-inspector 검토·보정 반영)
 
 ## 이번 세션에서 한 일
 - **Phase 0 (골격)**: `models/ api/ analytics/ ai/ services/ ui/ config/ data/ tests/` 디렉토리 생성, `requirements.txt`·`.gitignore`·`.env.example`·`pytest.ini` 작성. `.venv` 가상환경 생성 후 의존성 설치. 관문 0 통과
@@ -18,6 +18,28 @@
   - **실행 중 발견된 별개 이슈**: 개발 PC가 유동 IP라 등록된 IP(`211.238.109.167`)가 바뀌어 있어(`106.101.129.33`) `/candles` 호출이 403(`ip-not-allowed`)으로 막힘 → 사용자가 콘솔에서 재등록해 해결(API_DESIGN A8에 이미 경고된 상황)
   - **phase-inspector 1차 검토 결과: FAIL.** 관문4(5개 테스트)와 전체 스위트(93개)는 통과했지만, 적대적 입력 16종 중 9종이 예외를 밖으로 던짐 — Phase 3와 동일한 패턴("커버리지는 있지만 폴백 경로가 실제로는 안 죽지 않는다") 재발. Critical 6건 전부 사용자 확인 후 즉시 수정, 적대적 입력 프로브로 재검증 완료(관문4 재통과, 97개 전체 통과, ruff 통과)
   - 관문4 최종: `pytest tests/test_mock_client.py -v` **9/9 통과**(회귀 테스트 4건 추가), 전체 `pytest tests/` **97/97 통과**, `api/mock_client.py` 커버리지 62%(네트워크 실패 분기 일부 미검증 — Warning 항목)
+
+- **Phase 5 (`api/` 인프라)**: `tests/test_errors.py`(Red 확인, ModuleNotFoundError) → `api/errors.py`(예외 계층 TRD §7.1 + `error_for_code()` API_DESIGN §12.2 매핑), `tests/test_token_store.py` → `api/token_store.py`(`load_token`/`save_token`, API_DESIGN §2.3), `tests/test_throttle.py` → `api/throttle.py`(`AdaptiveThrottle`, API_DESIGN §11.2). 관문 5 최종: 31/31 통과, 전체 스위트 `pytest tests/ -m "not network"` **145/145 통과**, 신규 3파일 커버리지 **100%**
+  - **W-9 이행**: `api/mock_client.py`의 임시 토큰 로직(`_load_cached_token`/`_save_token`/`TOKEN_PATH`/`SAFETY_MARGIN`)을 삭제하고 `api.token_store`를 호출하도록 흡수. 이중 소스 해소. `_fetch_new_token`의 `_token_fetch_failed` 프로세스 가드(A5, 발급 실패 재시도 억제)는 저장이 아니라 "발급 시도" 억제라 판단해 mock_client.py에 그대로 둠
+  - `token_store.py`는 API_DESIGN §2.3 샘플 코드를 그대로 베끼지 않음 — C-4(Phase 4)에서 이미 고친 가드(`isinstance(d, dict)`, `expires_at` 숫자 변환, 확장 except 튜플)를 승계
+  - **phase-inspector 검토 결과: FAIL** (Critical 2, Warning 6, Suggestion 6). 아래 표 참고. Critical·Warning 전부 수정 완료, 회귀 테스트 18건 추가(31→49개, 전체 127→145개). Suggestion 중 W-6(NFR-304 사용자 메시지 매핑)은 Phase 5 범위 밖으로 판단해 열린 항목으로 이월
+
+### phase-inspector 검토(Phase 5) — FAIL → 수정 완료
+
+| # | 문제 | 조치 |
+|---|---|---|
+| C-1 | `token_store.save_token`의 `tempfile+os.replace` 원자적 교체가 **Windows에서 다른 프로세스가 대상 파일 핸들을 열고 있으면 `PermissionError`**로 크래시(W-2 Phase4를 해결하려다 다른 실패 모드로 전환된 것). `mock_client.py`의 except 튜플이 이 `OSError`를 못 잡아 목업 클라이언트가 그대로 죽음 | `save_token` 전체를 `try/except OSError`로 감싸 저장 실패해도 예외를 던지지 않음(NFR-201 — 캐시는 최적화, 실패해도 다음 호출에서 재발급될 뿐). `finally`에서 임시파일 정리(`unlink(missing_ok=True)`). 재현 테스트 2건 추가 |
+| C-2 | `AdaptiveThrottle.before()`가 서버가 준 `X-RateLimit-Reset` 값을 clamp 없이 `time.sleep()`에 그대로 전달 — **음수면 `ValueError`, 거대한 값(에포크 타임스탬프 등)이면 사실상 영구 정지**. FR-201b(P0) 위반 | `MAX_THROTTLE_WAIT=10.0` 상한 + `max(0.0, min(reset, MAX_THROTTLE_WAIT))` 클램프 추가. 대기 후 해당 그룹의 `_remaining`을 무효화(`pop`)해 `after()` 재호출 없이 매번 재대기하지 않도록 함. 재현 테스트 4건 추가 |
+| W-1 | `error_for_code`가 code가 list/dict 등 해시 불가능한 타입이면 `TypeError`로 크래시 (§12.3 `resp.json().get("error",{}).get("code")`가 서버 제어 JSON이라 이런 값이 도달 가능) | `code`가 `str`이 아니면 빈 문자열로 정규화 후 조회. 비-str 코드 4종 테스트 추가 |
+| W-2 | `load_token()`이 `access_token` 값의 타입을 검사하지 않아 dict/list/숫자를 그대로 반환 → 호출부가 `Bearer {dict}` 같은 깨진 헤더를 만들 수 있음 | `isinstance(token, str) and token`으로 가드. 비-str/빈문자열 5종 테스트 추가 |
+| W-3 (설계 결정) | `BrokerAPIError(code=None, message="")` 시그니처가 API_DESIGN §11.3/§12.3의 실제 raise 예시(`RateLimitError("메시지")`처럼 메시지를 위치 인자로 넘김)와 충돌 — Phase 6에서 문서대로 옮겨 적으면 `.code`에 사람이 읽는 문장이 들어가 §12.3 재시도 판단이 오염될 위험 | `__init__(self, message="", *, code=None)`으로 변경(메시지 위치 인자, code 키워드 전용). Phase 6가 아직 이 클래스를 소비하지 않는 시점이라 지금 확정. 시그니처 검증 테스트 2건 추가 |
+| W-4 | FR-201b(20종목 연속 조회 시 429 방지)를 실제로 담당하는 `min_interval` 간격 유지 로직이 기존 테스트 2건 모두 `min_interval=0.0`으로 꺼둔 채라 한 번도 실행되지 않음(커버리지 유일한 미커버 라인이었음) | `time.monotonic` monkeypatch로 연속 호출 간 간격이 실제로 강제되는지 값으로 검증하는 테스트 추가. 겸사겸사 `before()`가 `time.monotonic()`을 두 번 호출하던 것을 한 번으로 정리(가독성·테스트 결정성) |
+| W-5 | `token_store`/`throttle` 3개 except 블록이 전부 무로그. `throttle.after()`는 `_remaining`/`_reset`을 순차 대입해 후자만 파싱 실패해도 전자는 이미 갱신되는 부분 커밋 상태 존재 | 저장 실패·헤더 파싱 실패에 `logger.warning`/`logger.debug` 추가(토큰 값 자체는 로그에 남기지 않음). `after()`를 로컬 변수로 먼저 파싱한 뒤 한 번에 커밋하도록 변경 — 부분 갱신 방지 테스트 추가 |
+
+**열린 항목 (Phase 5 범위 밖으로 판단, 이월)**:
+- **W-6**: NFR-304("외부 예외 메시지를 화면에 그대로 노출 금지")를 담당할 `errors.py` ↔ API_DESIGN §16 표 매핑 함수가 아직 없음. TDD_PLAN T-5.1의 필수 5케이스에는 없었고, 이 매핑이 `api/errors.py`의 책임인지 `ui/`·`services/`의 책임인지가 사용자 판단 필요 사안이라 이번엔 만들지 않음 — Phase 7(services) 또는 Phase 8(ui) 착수 시 재확인
+- **S-3**: API_DESIGN §12.2의 알려진 코드 중 `internal-error`/`unsupported-symbol`/`stock-not-found`/`invalid-request`/`account-header-required`가 `_CODE_TO_EXCEPTION`에 없어 전부 일반 `BrokerAPIError`가 됨. `.code`는 보존되고 §12.3이 raw 코드 문자열로 분기하므로 기능상 문제는 없으나, "알려졌지만 의도적으로 미매핑"과 "완전히 미지"가 구분되지 않음. Phase 6에서 재확인
+- **S-5**: `api/throttle.py`가 타입 힌트 목적으로만 `httpx`를 런타임 import. 굳이 고칠 필요는 낮음(사용자 판단 시)
 
 ## phase-inspector 발견 → 수정 완료 항목
 | # | 문제 | 조치 |
@@ -107,10 +129,10 @@ phase-inspector가 발견했으나 이번엔 손대지 않은 항목 — 차단 
 - **(Phase 2) TDD_PLAN.md 관문 2 문구**: "`.env`가 없는 상태에서"라는 전제가 Phase S 실행 이후로는 이 저장소에서 영구히 성립하지 않음. 문서 자체를 고칠지는 사용자 판단 필요(코드 변경 아님)
 - **(Phase 2) `.env`의 `ANTHROPIC_API_KEY`**: 아직 `sk-ant-xxxxx` 플레이스홀더 그대로. Phase 6(AI 코멘트) 착수 전 실제 키로 교체 필요
 - **Red/Green 커밋 분리**: Phase 2·3·4 모두 미이행 (위 표 참고). TDD_PLAN상 Phase 4의 T-4.1~4.3은 애초에 "테스트 파일 없음"으로 설계돼 있어 이번엔 계획 자체가 구현 우선이었지만, 관문 테스트(T-4.4)와 구현이 같은 커밋으로 묶인 것은 동일한 패턴. 계속 포기할지 사용자 판단 필요
-- **W-2 (Phase 4)**: `data/cache/token.json` 쓰기가 비원자적(`write_text`)이고 락이 없음. Streamlit처럼 스크립트가 자주 재실행되는 환경에서 다른 프로세스가 쓰기 도중(빈 파일 상태)을 읽으면 불필요한 재발급이 일어나고, 토큰 단일성 제약(API_DESIGN §2.3) 때문에 먼저 돌던 세션의 토큰이 즉시 무효화될 수 있음. Phase 5 `token_store.py` 작성 시 임시파일+`os.replace()` 원자적 교체 검토 필요
-- **W-6/W-7 (Phase 4)**: `MockBrokerClient.__init__`이 샘플 파일 없음/손상 시 그대로 크래시함(폴백 클라이언트의 생성 자체가 실패하면 FR-104 경로 전체가 무너짐). 경로 상수(`DEFAULT_SAMPLE_PATH`, `TOKEN_PATH`)도 상대경로라 `streamlit run`을 다른 CWD에서 실행하면 못 찾음 — Phase 1 S-1(하드코딩 경로)과 같은 계열
+- ~~**W-2 (Phase 4)**: `data/cache/token.json` 쓰기가 비원자적~~ **Phase 5에서 해결.** `token_store.py`에 임시파일+`os.replace()` 도입 — 단, 1차 구현은 Windows에서 다른 프로세스가 대상 파일을 열고 있으면 `PermissionError`로 크래시하는 새 실패 모드를 만들었고(C-1), phase-inspector가 잡아내 저장 전체를 `try/except OSError`로 감싸 "실패해도 예외 없이 다음 호출에서 재발급"으로 최종 정리함
+- **W-6/W-7 (Phase 4)**: `MockBrokerClient.__init__`이 샘플 파일 없음/손상 시 그대로 크래시함(폴백 클라이언트의 생성 자체가 실패하면 FR-104 경로 전체가 무너짐). `DEFAULT_SAMPLE_PATH`가 여전히 상대경로라 `streamlit run`을 다른 CWD에서 실행하면 못 찾음 — Phase 1 S-1(하드코딩 경로)과 같은 계열. (`TOKEN_PATH`는 Phase 5에서 `Path(__file__)` 기준 절대경로로 이미 전환됨 — 이 항목은 `DEFAULT_SAMPLE_PATH`에만 해당)
 - **W-8 (Phase 4)**: `fetch_price_history`에서 환율 조회 실패 시 `fx = Decimal(1)`로 폴백해 USD 가격을 원화인 것처럼 시계열에 넣음. DATA_DESIGN §3.2는 "환율 실패 → USD 종목 시계열에서 제외 + 경고"를 요구. 목업은 항상 샘플 환율이 있어 지금은 발현 안 되지만, 이 코드가 Phase 6 `toss_client.py`로 흡수되면 실제로 문제될 수 있음
-- **W-9 (Phase 4, 사용자 확인된 설계)**: 토큰 발급/캐싱 로직이 `api/mock_client.py`에 있어 Phase 5 `api/token_store.py`와 이중 소스가 될 예정. **Phase 5/6 착수 시 mock_client의 private 함수(`_load_cached_token` 등)를 지우고 `token_store.py`로 흡수할 것을 여기 못박아 둔다.** 문서(API_DESIGN §2.3)의 토큰 캐시 샘플 코드가 C-4와 동일한 손상 파일 처리 구멍을 갖고 있으므로, 흡수 시 문서를 그대로 베끼지 말고 이번에 고친 가드를 유지할 것
+- ~~**W-9 (Phase 4)**: 토큰 발급/캐싱 로직 이중 소스~~ **Phase 5에서 해결.** `mock_client.py`의 private 함수를 지우고 `api.token_store`로 흡수 완료. C-4에서 고친 가드(손상 파일 처리)도 `token_store.py`에 승계됨
 - **W-10 (Phase 4)**: 가격 시계열 인덱스가 `DatetimeIndex`가 아니라 `datetime.date`의 object dtype Index. DATA_DESIGN §3.1은 `DatetimeIndex`를 명시하지만 실측 결과 object Index로 동작함 — Phase 6/7에서 실제 문제가 되면(예: 날짜 연산) 그때 정규화
 - **W-11 (Phase 4)**: `BrokerClient` Protocol이 `@runtime_checkable`이 아니고, `MockBrokerClient`가 Protocol 준수를 검증하는 장치(타입체커·테스트)가 없음. Phase 6에서 `TossSecuritiesClient` 추가 시 같이 확인
 - **S-2 (Phase 4)**: `MockBrokerClient.fetch_portfolio()`의 `account_no="00000000000"`이 실계좌(`*******5597`)와 구분이 잘 안 되는 임의값. `"(샘플)"`처럼 명백히 가짜인 문자열로 바꿀지 사용자 판단 필요
@@ -119,4 +141,7 @@ phase-inspector가 발견했으나 이번엔 손대지 않은 항목 — 차단 
 - 스모크 테스트 스크립트 콘솔 출력에서 한글 요약 문구가 인코딩 문제로 깨짐 (Windows 콘솔 코드페이지 이슈로 추정). 기능 결과(JSON)에는 영향 없음. 스크립트는 스크래치패드에만 존재하며 커밋 대상 아님
 
 ## 다음 시작 지점
-`docs/TDD_PLAN.md` **Phase 5 (`api/` 인프라 — `token_store.py`, `throttle.py`, `errors.py`)**부터 진행. Phase 5 착수 시 위 W-9 항목대로 `api/mock_client.py`의 임시 토큰 로직을 `token_store.py`로 흡수할 것.
+`docs/TDD_PLAN.md` **Phase 6 (`api/toss_client.py` — 실계좌 연동)**부터 진행. Phase 5에서 만든 `api/errors.py`(`error_for_code`, `BrokerAPIError(message, *, code=)`)와 `api/throttle.py`(`AdaptiveThrottle`), `api/token_store.py`(`load_token`/`save_token`)를 그대로 소비한다. Phase 6 착수 시 참고할 것:
+- W-3(Phase 5) 결정에 따라 `BrokerAPIError`/하위 클래스를 raise할 때 메시지는 위치 인자, 에러코드는 `code=` 키워드로 넘길 것 (`RateLimitError("메시지", code="rate-limit-exceeded")`)
+- W-6(Phase 5, 열린 항목): NFR-304 사용자 메시지 매핑(API_DESIGN §16)을 `errors.py`에 둘지 `services`/`ui`에 둘지 이번에 결정 필요
+- S-3(Phase 5, 열린 항목): `internal-error`/`unsupported-symbol`/`stock-not-found`/`invalid-request`/`account-header-required` 등은 `error_for_code`에서 전부 일반 `BrokerAPIError`(code만 보존)로 나옴 — §12.3 재시도 판단 시 `.code` 문자열로 분기할 것
