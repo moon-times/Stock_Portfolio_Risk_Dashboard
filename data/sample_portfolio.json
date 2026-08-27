@@ -1,0 +1,50 @@
+{
+  "holdings": {
+    "result": {
+      "totalPurchaseAmount": {"krw": "58200000", "usd": "17800"},
+      "marketValue": {
+        "amount":          {"krw": "63400000", "usd": "18620"},
+        "amountAfterCost": {"krw": "62100000", "usd": "18450"}
+      },
+      "profitLoss": {
+        "amount": {"krw": "5200000", "usd": "820"},
+        "rate": "0.0912", "rateAfterCost": "0.0790"
+      },
+      "dailyProfitLoss": {
+        "amount": {"krw": "-1140000", "usd": "-210"},
+        "rate": "-0.0180"
+      },
+      "items": [
+        {"symbol": "005930", "name": "삼성전자", "marketCountry": "KR", "currency": "KRW",
+         "quantity": "150", "lastPrice": "73500", "averagePurchasePrice": "68000",
+         "dailyProfitLoss": {"amount": "-165000", "rate": "-0.0147"}},
+        {"symbol": "000660", "name": "SK하이닉스", "marketCountry": "KR", "currency": "KRW",
+         "quantity": "60", "lastPrice": "128000", "averagePurchasePrice": "115000",
+         "dailyProfitLoss": {"amount": "-153000", "rate": "-0.0195"}},
+        {"symbol": "148070", "name": "KOSEF 국고채10년", "marketCountry": "KR", "currency": "KRW",
+         "quantity": "200", "lastPrice": "63200", "averagePurchasePrice": "62000",
+         "dailyProfitLoss": {"amount": "12000", "rate": "0.0009"}},
+        {"symbol": "132030", "name": "KODEX 골드선물", "marketCountry": "KR", "currency": "KRW",
+         "quantity": "550", "lastPrice": "15300", "averagePurchasePrice": "14800",
+         "dailyProfitLoss": {"amount": "27500", "rate": "0.0033"}},
+        {"symbol": "AAPL", "name": "Apple Inc.", "marketCountry": "US", "currency": "USD",
+         "quantity": "45", "lastPrice": "231.4", "averagePurchasePrice": "205.0",
+         "dailyProfitLoss": {"amount": "-140", "rate": "-0.0132"}},
+        {"symbol": "MSFT", "name": "Microsoft", "marketCountry": "US", "currency": "USD",
+         "quantity": "22", "lastPrice": "398.2", "averagePurchasePrice": "372.5",
+         "dailyProfitLoss": {"amount": "-95", "rate": "-0.0108"}}
+      ]
+    }
+  },
+  "buying_power": {"KRW": "6800000", "USD": "1200"},
+  "exchange_rate": {"rate": "1382.4", "midRate": "1376.0"},
+  "risk_free": {"symbol": "KR_BOND_3Y", "lastPrice": "3.25"},
+  "stocks": [
+    {"symbol": "005930", "market": "KOSPI",  "securityType": "STOCK", "status": "ACTIVE"},
+    {"symbol": "000660", "market": "KOSPI",  "securityType": "STOCK", "status": "ACTIVE"},
+    {"symbol": "148070", "market": "KOSPI",  "securityType": "ETF",   "status": "ACTIVE"},
+    {"symbol": "132030", "market": "KOSPI",  "securityType": "ETF",   "status": "ACTIVE"},
+    {"symbol": "AAPL",   "market": "NASDAQ", "securityType": "FOREIGN_STOCK", "status": "ACTIVE"},
+    {"symbol": "MSFT",   "market": "NASDAQ", "securityType": "FOREIGN_STOCK", "status": "ACTIVE"}
+  ]
+}

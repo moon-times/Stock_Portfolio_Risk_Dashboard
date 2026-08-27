@@ -1,4 +1,4 @@
-# 세션 상태 — 2026-08-27 (Phase 0 / Phase S / Phase 1 / Phase 2 / Phase 3 완료, phase-inspector 검토·보정 반영)
+# 세션 상태 — 2026-08-27 (Phase 0 / Phase S / Phase 1 / Phase 2 / Phase 3 / Phase 4 완료, phase-inspector 검토·보정 반영)
 
 ## 이번 세션에서 한 일
 - **Phase 0 (골격)**: `models/ api/ analytics/ ai/ services/ ui/ config/ data/ tests/` 디렉토리 생성, `requirements.txt`·`.gitignore`·`.env.example`·`pytest.ini` 작성. `.venv` 가상환경 생성 후 의존성 설치. 관문 0 통과
@@ -10,6 +10,14 @@
   - `risk_metrics.py` (6지표: 변동성·샤프·MDD·VaR·베타·HHI), `returns.py`(포트폴리오 수익률), `classifier.py`(7단계 자산군 분류 + YAML 로더), `allocation.py`(자산배분 집계), `correlation.py`(자산군 상관행렬)
   - `models/metrics.py`에 `AllocationItem`/`AllocationBreakdown` 신규 추가 (Phase 1에서 미룬 것, DATA_DESIGN §2.5)
   - **phase-inspector 1차 검토 결과: FAIL.** 커버리지 100%였지만 실제 크래시·요구사항 미충족 버그 다수 발견 → 전부 수정 후 2차 확인. 관문 3 최종: `pytest tests/ --cov=analytics` **88/88 통과, analytics 커버리지 98%** (요구치 80% 상회)
+
+- **Phase 4 (`api/mock_client.py` + 샘플 데이터)**: `data/sample_portfolio.json`(DATA_DESIGN §7 그대로), `api/base.py`(`BrokerClient` Protocol), `api/mock_client.py`(`MockBrokerClient`), `tests/test_mock_client.py` 작성
+  - **사전 협의 사항 (사용자 확인)**: DATA_DESIGN §7/USE_CASES.md는 "목업도 가격 히스토리(`/candles`, `/market-indicators/{symbol}/candles`)는 실제 API로 호출한다"고 명시하지만, 토큰/에러/스로틀 인프라(Phase 5·6 예정)가 아직 없었다. 사용자에게 물어 **"최소 HTTP 클라이언트를 지금 만들고, Phase 6에서 toss_client.py로 흡수한다"**로 결정. `api/mock_client.py` 안에 모듈 레벨 private 함수로 토큰 발급/캐싱 + 최소 GET 래퍼(재시도·스로틀 없음, 401 시 1회 재발급만)를 넣음
+  - **정적 vs 실조회 구분**: `fetch_stock_meta`/`fetch_exchange_rate`/`fetch_risk_free_rate`는 샘플 JSON의 고정값을 읽기만 하고, `fetch_price_history`/`fetch_benchmark_history`만 실제 네트워크를 탄다(DATA_DESIGN §7의 의도로 판단)
+  - **분류(classify) 책임 소재**: COMPONENT_DESIGN §2.1에 따르면 classify()는 Phase 7 `services/dashboard_service.py`의 책임이라, `MockBrokerClient.fetch_portfolio()`는 `asset_class`를 채우지 않는다(기본값 `OTHER`). `tests/test_mock_client.py`의 `classified_portfolio` fixture가 fetch_portfolio + fetch_stock_meta + classify()를 테스트 안에서 임시로 조합해 관문4(자산군 5개, ETF 하위분류, 비중합계, 상관행렬)를 검증함 — Phase 7에서 이 조합 로직이 서비스로 옮겨가면 이 fixture는 정리 대상
+  - **실행 중 발견된 별개 이슈**: 개발 PC가 유동 IP라 등록된 IP(`211.238.109.167`)가 바뀌어 있어(`106.101.129.33`) `/candles` 호출이 403(`ip-not-allowed`)으로 막힘 → 사용자가 콘솔에서 재등록해 해결(API_DESIGN A8에 이미 경고된 상황)
+  - **phase-inspector 1차 검토 결과: FAIL.** 관문4(5개 테스트)와 전체 스위트(93개)는 통과했지만, 적대적 입력 16종 중 9종이 예외를 밖으로 던짐 — Phase 3와 동일한 패턴("커버리지는 있지만 폴백 경로가 실제로는 안 죽지 않는다") 재발. Critical 6건 전부 사용자 확인 후 즉시 수정, 적대적 입력 프로브로 재검증 완료(관문4 재통과, 97개 전체 통과, ruff 통과)
+  - 관문4 최종: `pytest tests/test_mock_client.py -v` **9/9 통과**(회귀 테스트 4건 추가), 전체 `pytest tests/` **97/97 통과**, `api/mock_client.py` 커버리지 62%(네트워크 실패 분기 일부 미검증 — Warning 항목)
 
 ## phase-inspector 발견 → 수정 완료 항목
 | # | 문제 | 조치 |
@@ -57,11 +65,27 @@
 | S-2/S-3 (suggestion) | 설정 파일 로드 실패·미지의 라벨이 조용히 무시됨(COMPONENT_DESIGN 샘플은 `logger.warning` 사용) | `analytics/classifier.py`에 로깅 추가 (파일 없음/손상/비-dict/미지 라벨 4곳) |
 | S-4 (suggestion) | `if cash_total:`이 의도(0 초과)보다 넓게(0이 아니면 전부) 읽힘 | `if cash_total > 0:`으로 명시 |
 
+### phase-inspector 검토(Phase 4) — FAIL → Critical 수정 완료
+
+관문4(5개)와 전체 스위트(93개)는 통과했지만, 적대적 입력 16종 중 9종이 예외를 밖으로 던졌다 — Phase 3와 동일한 패턴("커버리지는 있지만 폴백 경로가 실제로는 안 죽지 않는다") 재발.
+
+| # | 문제 | 조치 |
+|---|---|---|
+| C-1 | `fetch_portfolio`의 종목 스킵 로직이 사실상 작동 안 함 — `quantity=null`, `marketCountry="JP"`(직접 `MarketCountry(...)` 호출이라 `ValueError`), 음수 quantity/price 등 8가지 현실적 입력이 예외로 그대로 튐 | API_DESIGN §4.6 `_to_holding` 패턴을 따라 `market_country`/`currency`를 원시 문자열로 넘겨 pydantic이 `ValidationError`로 통일 처리하게 하고, `Decimal(str(v))`로 감싸 `TypeError`를 `InvalidOperation`으로 전환. except를 `(KeyError, ValidationError, InvalidOperation, TypeError)`로 확장 + `logger.warning` |
+| C-2 | 포트폴리오 전역 필드(환율·현금)가 종목 단위 try 밖에 있어 `exchange_rate` 키 누락·`buying_power.USD=null`·음수 현금이 전체를 크래시시킴 | `.get()` 기반 널 가드 + `Decimal(str(v or 0))`, `Portfolio(...)` 생성 자체가 `ValidationError`(예: 음수 현금)로 실패하면 현금 0으로 재시도하는 폴백 추가 |
+| C-3 | 캔들/벤치마크 파싱 except 튜플이 서로 달라 종목 1개의 이상 데이터(`timestamp` 파싱 불가, `closePrice=null`)가 전체 요청을 죽임(FR-204 위반) | 공통 헬퍼 `_candles_to_series`로 통합하고 양쪽 다 `(KeyError, TypeError, ValueError, InvalidOperation)`로 통일 |
+| C-4 | 손상된 `data/cache/token.json`(최상위가 `[]`/`null`/문자열, `expires_at`이 문자열/`null`)이 앱을 크래시시킴 | `isinstance(d, dict)` 가드 + `float(d["expires_at"])` 명시 변환 + except에 `TypeError`/`ValueError` 추가. **API_DESIGN §2.3 문서의 샘플 코드도 동일한 구멍을 갖고 있음 — Phase 5 `token_store.py` 작성 시 문서를 그대로 베끼지 말 것** |
+| C-5 | 신규상장/거래정지 등 캔들이 5봉만 있는 종목 1개가 `ffill`로 전체 시계열을 5일치로 붕괴시킴(반대로 상수 시계열은 표준편차 0으로 조용히 살아남음) — DATA_DESIGN §6 "유효 행 ≥30 제외" 미구현 | `pd.DataFrame` 조립 **전에** 종목별로 `len(series) < 30`이면 제외하는 가드 추가(`MIN_VALID_PRICE_ROWS`), 얇은 종목이 건강한 종목의 유효 기간을 깎아먹지 않음을 실측 확인 |
+| C-6 | 토큰 발급 실패 시 종목 수만큼(6~7회) `/oauth2/token`을 반복 호출 — API_DESIGN A5("발급 실패는 재시도 금지, AUTH 레이트리밋 소모") 위반 | 모듈 레벨 `_token_fetch_failed` 플래그로 프로세스 수명 동안 재시도 억제 |
+| W-4 | 실네트워크 의존 테스트(상관행렬)가 IP 화이트리스트 상태에 따라 오늘 세션에서만 2회 깨짐(사용자 확인) | `pytest.ini`에 `network` 마커 등록, `test_correlation_matrix_at_least_2x2`에 `@pytest.mark.network` + `skipif(not settings.has_broker_credentials)` 추가. 자격증명 없으면 skip, 있는데 IP가 막히면 명확한 assert 메시지로 실패(조용히 안 넘어감) |
+
+수정 후 적대적 입력 18종(6 Critical 시나리오 + 손상된 토큰 5종 등)으로 직접 재현 스크립트를 돌려 전부 크래시 없이 처리됨을 확인(스크립트는 스크래치패드에만 존재, 커밋 대상 아님). 회귀 테스트 4건(`test_is_live_is_false`, `test_fetch_risk_free_rate_converts_percent_to_decimal`, `test_fetch_exchange_rate_returns_mid_rate`, `test_malformed_holding_is_skipped_not_crashed`)을 `tests/test_mock_client.py`에 추가. 최종: `pytest tests/ --cov` **97/97 통과**, `ruff check api/ tests/test_mock_client.py` 통과.
+
 ## 확정된 사실 / 결정
 | 항목 | 내용 |
 |---|---|
 | Python 실행환경 | `python` 명령이 Windows Store 스텁이라 깨져 있음. `py -3` 사용. 프로젝트는 `.venv`(Python 3.13.3)로 격리 설치함 |
-| 개발 PC 공인 IP | `211.238.109.167` (2026-08-27 콘솔 화이트리스트 등록 완료) |
+| 개발 PC 공인 IP | 유동 IP로 확인됨 — Phase S 때 `211.238.109.167`로 등록했으나 Phase 4 진행 중 `106.101.129.33`으로 바뀌어 `/candles`가 403(`ip-not-allowed`)으로 막힘. 콘솔에서 재등록해 해결(2026-08-27). **접속 세션이 바뀔 때마다 IP 재확인 필요할 수 있음** |
 | 토큰 캐시 | Phase S에서 발급한 실토큰이 `data/cache/token.json`에 저장됨 (`expires_in=86399`). Phase 6에서 재사용 가능, `.gitignore` 대상 |
 | 실계좌 확인 결과 | `accountSeq=2`, `BROKERAGE` 계좌 1개, 계좌번호 마스킹 `*******5597`. `cashBuyingPower` KRW 10원(배당금 추정)/USD 0. `marketValue.amount.usd`는 `null`이 아니라 실제 문자열값(`"221.627494"`)으로 옴 — 위험 3(널 가드)은 이 계좌에서는 트리거되지 않았으나 코드에는 여전히 가드 유지 |
 | `models/` 파일 범위 | 이번 Phase 1에서는 TRD.md §3 디렉토리 구조(5개 파일: `holding.py` `portfolio.py` `metrics.py` `stock_meta.py` `commentary.py`)를 따랐다. **정정**: TDD_PLAN.md T-1.2 원문은 `dashboard.py`(`DashboardData`)까지 6개를 명시하여 TRD와 충돌한다 — "범위 밖"이 아니라 **의도적 연기**다. `DashboardData`가 아직 미구현인 `AllocationBreakdown`(DATA_DESIGN §2.5)에 의존하므로, `AllocationBreakdown`이 만들어지는 Phase 3(T-3.3) 이후, 늦어도 소비처인 Phase 7(T-7.1, `services/dashboard_service.py`) 착수 전에는 반드시 생성해야 한다 |
@@ -82,10 +106,17 @@ phase-inspector가 발견했으나 이번엔 손대지 않은 항목 — 차단 
 - **S-6 (Phase 3, 검토 후 유지하기로 함)**: `classify()`의 `holding_row["symbol"]`이 키 없으면 `KeyError`를 던짐 — DATA_DESIGN §5.3 원문 그대로. API_DESIGN §4.6의 `_to_holding` 래퍼가 이미 이런 예외를 잡아 해당 종목만 건너뛰므로, 상위 호출 경로가 보호되는 한 classify() 자체를 `.get()`으로 바꾸지 않기로 함 — Phase 6에서 `_to_holding` 구현 시 재확인
 - **(Phase 2) TDD_PLAN.md 관문 2 문구**: "`.env`가 없는 상태에서"라는 전제가 Phase S 실행 이후로는 이 저장소에서 영구히 성립하지 않음. 문서 자체를 고칠지는 사용자 판단 필요(코드 변경 아님)
 - **(Phase 2) `.env`의 `ANTHROPIC_API_KEY`**: 아직 `sk-ant-xxxxx` 플레이스홀더 그대로. Phase 6(AI 코멘트) 착수 전 실제 키로 교체 필요
-- **Red/Green 커밋 분리**: Phase 2·3 모두 미이행 (위 표 참고). Phase 4부터 다시 시도할지, 이 프로젝트 규모에선 비용 대비 효과가 낮다고 보고 포기할지 사용자 판단 필요
+- **Red/Green 커밋 분리**: Phase 2·3·4 모두 미이행 (위 표 참고). TDD_PLAN상 Phase 4의 T-4.1~4.3은 애초에 "테스트 파일 없음"으로 설계돼 있어 이번엔 계획 자체가 구현 우선이었지만, 관문 테스트(T-4.4)와 구현이 같은 커밋으로 묶인 것은 동일한 패턴. 계속 포기할지 사용자 판단 필요
+- **W-2 (Phase 4)**: `data/cache/token.json` 쓰기가 비원자적(`write_text`)이고 락이 없음. Streamlit처럼 스크립트가 자주 재실행되는 환경에서 다른 프로세스가 쓰기 도중(빈 파일 상태)을 읽으면 불필요한 재발급이 일어나고, 토큰 단일성 제약(API_DESIGN §2.3) 때문에 먼저 돌던 세션의 토큰이 즉시 무효화될 수 있음. Phase 5 `token_store.py` 작성 시 임시파일+`os.replace()` 원자적 교체 검토 필요
+- **W-6/W-7 (Phase 4)**: `MockBrokerClient.__init__`이 샘플 파일 없음/손상 시 그대로 크래시함(폴백 클라이언트의 생성 자체가 실패하면 FR-104 경로 전체가 무너짐). 경로 상수(`DEFAULT_SAMPLE_PATH`, `TOKEN_PATH`)도 상대경로라 `streamlit run`을 다른 CWD에서 실행하면 못 찾음 — Phase 1 S-1(하드코딩 경로)과 같은 계열
+- **W-8 (Phase 4)**: `fetch_price_history`에서 환율 조회 실패 시 `fx = Decimal(1)`로 폴백해 USD 가격을 원화인 것처럼 시계열에 넣음. DATA_DESIGN §3.2는 "환율 실패 → USD 종목 시계열에서 제외 + 경고"를 요구. 목업은 항상 샘플 환율이 있어 지금은 발현 안 되지만, 이 코드가 Phase 6 `toss_client.py`로 흡수되면 실제로 문제될 수 있음
+- **W-9 (Phase 4, 사용자 확인된 설계)**: 토큰 발급/캐싱 로직이 `api/mock_client.py`에 있어 Phase 5 `api/token_store.py`와 이중 소스가 될 예정. **Phase 5/6 착수 시 mock_client의 private 함수(`_load_cached_token` 등)를 지우고 `token_store.py`로 흡수할 것을 여기 못박아 둔다.** 문서(API_DESIGN §2.3)의 토큰 캐시 샘플 코드가 C-4와 동일한 손상 파일 처리 구멍을 갖고 있으므로, 흡수 시 문서를 그대로 베끼지 말고 이번에 고친 가드를 유지할 것
+- **W-10 (Phase 4)**: 가격 시계열 인덱스가 `DatetimeIndex`가 아니라 `datetime.date`의 object dtype Index. DATA_DESIGN §3.1은 `DatetimeIndex`를 명시하지만 실측 결과 object Index로 동작함 — Phase 6/7에서 실제 문제가 되면(예: 날짜 연산) 그때 정규화
+- **W-11 (Phase 4)**: `BrokerClient` Protocol이 `@runtime_checkable`이 아니고, `MockBrokerClient`가 Protocol 준수를 검증하는 장치(타입체커·테스트)가 없음. Phase 6에서 `TossSecuritiesClient` 추가 시 같이 확인
+- **S-2 (Phase 4)**: `MockBrokerClient.fetch_portfolio()`의 `account_no="00000000000"`이 실계좌(`*******5597`)와 구분이 잘 안 되는 임의값. `"(샘플)"`처럼 명백히 가짜인 문자열로 바꿀지 사용자 판단 필요
 
 ## 알려진 이슈
 - 스모크 테스트 스크립트 콘솔 출력에서 한글 요약 문구가 인코딩 문제로 깨짐 (Windows 콘솔 코드페이지 이슈로 추정). 기능 결과(JSON)에는 영향 없음. 스크립트는 스크래치패드에만 존재하며 커밋 대상 아님
 
 ## 다음 시작 지점
-`docs/TDD_PLAN.md` **Phase 4 (목업 클라이언트 + 샘플 데이터)**부터 진행. `data/sample_portfolio.json`(DATA_DESIGN §7), `api/base.py`(BrokerClient 프로토콜), `api/mock_client.py`. 발표 서사 보증 관문(T-4.4): 자산군 5개, 상관행렬 2×2 이상.
+`docs/TDD_PLAN.md` **Phase 5 (`api/` 인프라 — `token_store.py`, `throttle.py`, `errors.py`)**부터 진행. Phase 5 착수 시 위 W-9 항목대로 `api/mock_client.py`의 임시 토큰 로직을 `token_store.py`로 흡수할 것.
