@@ -1,4 +1,4 @@
-# 세션 상태 — 2026-08-27 (Phase 0 / Phase S / Phase 1 / Phase 2 / Phase 3 / Phase 4 / Phase 5 완료, phase-inspector 검토·보정 반영)
+# 세션 상태 — 2026-08-27 (Phase 0 / Phase S / Phase 1 / Phase 2 / Phase 3 / Phase 4 / Phase 5 / Phase 6 완료, phase-inspector 검토·보정 반영)
 
 ## 이번 세션에서 한 일
 - **Phase 0 (골격)**: `models/ api/ analytics/ ai/ services/ ui/ config/ data/ tests/` 디렉토리 생성, `requirements.txt`·`.gitignore`·`.env.example`·`pytest.ini` 작성. `.venv` 가상환경 생성 후 의존성 설치. 관문 0 통과
@@ -40,6 +40,39 @@
 - **W-6**: NFR-304("외부 예외 메시지를 화면에 그대로 노출 금지")를 담당할 `errors.py` ↔ API_DESIGN §16 표 매핑 함수가 아직 없음. TDD_PLAN T-5.1의 필수 5케이스에는 없었고, 이 매핑이 `api/errors.py`의 책임인지 `ui/`·`services/`의 책임인지가 사용자 판단 필요 사안이라 이번엔 만들지 않음 — Phase 7(services) 또는 Phase 8(ui) 착수 시 재확인
 - **S-3**: API_DESIGN §12.2의 알려진 코드 중 `internal-error`/`unsupported-symbol`/`stock-not-found`/`invalid-request`/`account-header-required`가 `_CODE_TO_EXCEPTION`에 없어 전부 일반 `BrokerAPIError`가 됨. `.code`는 보존되고 §12.3이 raw 코드 문자열로 분기하므로 기능상 문제는 없으나, "알려졌지만 의도적으로 미매핑"과 "완전히 미지"가 구분되지 않음. Phase 6에서 재확인
 - **S-5**: `api/throttle.py`가 타입 힌트 목적으로만 `httpx`를 런타임 import. 굳이 고칠 필요는 낮음(사용자 판단 시)
+
+- **Phase 6 (`api/toss_client.py` — 실계좌 연동)**: `TossSecuritiesClient` 신규 구현 — `bootstrap()`(accounts→accountSeq 해석), `_request()`(API_DESIGN §12.3 공통 요청 래퍼: 401 1회 재발급/429 Retry-After 대기/maintenance 등 즉시예외/500계열 지수백오프), `fetch_portfolio/fetch_stock_meta/fetch_price_history/fetch_benchmark_history/fetch_risk_free_rate/fetch_exchange_rate`. `tests/test_toss_mapping.py` 신규(`httpx.MockTransport`, 네트워크 없이 검증)
+  - **`api/mock_client.py` 리팩터링**: Phase 4에서 "임시로 만들고 Phase 6에서 흡수한다"고 예고했던 자체 토큰/시세 조회 로직(`_get_market_data`/`_get_token`/`_fetch_new_token`/`_candles_to_series`, ~90줄)을 전부 삭제하고 `TossSecuritiesClient` 인스턴스에 `fetch_price_history`/`fetch_benchmark_history`를 위임. 계좌 컨텍스트 불필요 엔드포인트라 `bootstrap()` 없이도 위임 가능함을 이용
+  - **classify() 미호출 결정 승계**: `_to_holding()`은 종목 메타를 받지 않고 `asset_class`를 채우지 않는다(Phase 3/4에서 "분류는 services 레이어 책임"으로 이미 결정된 것을 그대로 따름). `meta` 매개변수 자체가 죽은 코드였음이 phase-inspector 검토에서 지적되어 삭제(`_to_holding(row)`로 시그니처 단순화)
+  - **관문 6 검증(실계좌)**: 스크래치패드 스크립트로 실계좌(`accountSeq=2`, VOO 단일 보유) 대상 2회 연속 실행 — `accountSeq` 해석 성공, `account_no` `*******5597`로 마스킹, `token.json`의 `expires_at`이 두 실행 모두 불변(재발급 없음, AT-09 충족). `fetch_price_history`/`fetch_benchmark_history("KOSPI")`/`fetch_risk_free_rate`/`fetch_stock_meta`도 실 API로 개별 확인, 전부 정상값
+  - **phase-inspector 1차 검토 결과: FAIL.** Critical 9건, Warning 12건, Suggestion 7건. 아래 표 참고. Critical 전부 + Warning 대부분 수정 완료, 재검증(pytest 전체 201/201 통과 — Phase 5까지 145 + Phase6 신규 56, `ruff check` 통과, 실계좌 재확인 완료)
+
+### phase-inspector 검토(Phase 6) — FAIL → 수정 완료
+
+| # | 문제 | 조치 |
+|---|---|---|
+| C-1 | `_request`가 200 응답 본문이 dict가 아니어도(list/HTML 등) 그대로 반환 + 하위 전 파싱 지점(`fetch_portfolio`/`fetch_exchange_rate`/`_fetch_buying_power`/`fetch_price_history`/`fetch_benchmark_history`/`fetch_risk_free_rate`/`fetch_stock_meta`/`resolve_account`)이 `.get()` 체인을 서버가 준 값의 타입을 신뢰하고 호출 — 뒤틀린 응답에 `AttributeError`/`JSONDecodeError`로 크래시 | `_request`가 200이어도 본문이 dict가 아니면 `BrokerAPIError`로 변환. `_as_dict`/`_as_list` 헬퍼를 신설해 모든 `X.get("result") or {}` 패턴을 대체(타입이 틀려도 안전하게 빈 컨테이너) |
+| C-2 | `fetch_stock_meta`의 except 튜플이 형제 함수(`_to_holding`)와 비대칭 — 응답 원소가 dict가 아니면 `TypeError`로 크래시 (Phase 4 C-3과 동일한 "형제 메서드 비대칭" 패턴 재발) | 원소가 dict가 아니면 명시적으로 스킵하는 가드 추가 |
+| C-3 | 429 `Retry-After`를 clamp 없이 `time.sleep`에 전달 — 음수면 `ValueError`, 에포크 타임스탬프급이면 사실상 영구정지. **Phase 5 C-2에서 이미 고쳤던 결함이 새 파일이라 재사용되지 않고 재발** | `MAX_RETRY_WAIT=10.0` 상수 신설 + `max(0.0, min(wait, MAX_RETRY_WAIT))` clamp (throttle.py의 것과 책임이 달라 상수는 분리) |
+| C-4 | 환율 조회 실패 시 `fx = fetch_exchange_rate() or Decimal(1)`로 USD 캔들을 그대로 원화 시계열에 투입 — FR-202a(P0)·DATA_DESIGN §3.2 정면 위반. **이 결함은 이전 세션에 W-8로 이미 예고돼 있었는데("Phase 6으로 흡수되면 문제될 수 있음") 코드가 그대로 이식됨** | 캔들 자체의 `currency` 필드로 USD 여부를 판정해, 환율이 없으면 그 종목을 원화 환산 없이 넣지 않고 제외+경고 (KRW 종목은 영향 없음) |
+| C-5 | 위험1(토큰 무효화 루프) 실제 재현: 401 재발급 후 `token_store.save_token()`이 조용히 실패하면(Windows 파일 잠금 등, Phase 5의 정상적인 방어 동작) 다음 attempt가 `load_token()`으로 디스크를 다시 읽어 또 발급 — 저장 실패가 잦으면 요청 1회에 토큰이 여러 번 발급되어 서로를 무효화 | `_request` 내부에 `forced_token` 지역변수를 두어, 401 후 강제 발급한 토큰을 저장 성공 여부와 무관하게 그 요청의 나머지 시도에서 직접 재사용 |
+| C-6 | `_fetch_new_token`이 `access_token` 값의 타입을 검사하지 않아 서버가 dict/list 등을 주면 그대로 반환·저장 — 이후 `Bearer {...}` 깨진 헤더 + (Phase5 W-2 가드로 인해) 캐시가 영구적으로 `None`을 반환해 매 호출마다 재발급 | 토큰이 non-empty str이 아니면 `AuthenticationError` |
+| C-7 | `MockBrokerClient`(FR-104 "절대 안 죽는다" 폴백)가 위임 리팩터링으로 무크래시 계약을 잃음 — `fetch_price_history`는 `PriceDataError`만 잡고 위임 대상이 던질 수 있는 다른 예외는 그대로 escape, `fetch_benchmark_history`는 아예 무가드 | 위임 호출을 `(DashboardError, KeyError, TypeError, ValueError, InvalidOperation)`로 감싸 실패 시 빈 DataFrame/Series 반환 |
+| C-8 | `fetch_portfolio`의 `ValidationError` 폴백이 `fx_rate`/`daily_pnl_rate`까지 통째로 버림 — 현금 필드 하나만 잘못돼도 USD 보유종목이 `market_value_krw(fx_rate=None)`에서 조용히 빠져 총자산이 크게 축소(극단적으로 0)돼 표시. `api/mock_client.py`의 동일 패턴도 함께 수정 | 폴백 시 `fx_rate`/`daily_pnl_rate`는 유지하고 현금만 0. 근본 원인도 `_fetch_buying_power`가 음수·NaN을 미리 `Decimal(0)`으로 정규화하도록 방어(이중 방어) |
+| C-9 | Phase 6 전체가 커밋되지 않은 채 phase-inspector 검토를 받음(Red/Green 커밋 이력 부재, CLAUDE.md "매 phase 커밋" 위반) | 이 표의 수정 완료 후 본 세션에서 커밋·푸시 진행 |
+| W-1 | `_request`의 전송 예외 캐치(`ConnectError`/`ReadTimeout`/`TimeoutException`)가 `RemoteProtocolError` 등을 놓침(실서버가 응답 도중 연결을 끊는 경우 실환경에서 흔함) | `httpx.TransportError`(상위 클래스)로 통일 |
+| W-2 | `fetch_risk_free_rate`에 DATA_DESIGN §6의 `0<=r<=0.2` 범위 가드가 없음 — `/100` 변환(위험2)은 맞지만 NaN/Infinity/스케일 오류가 그대로 화면 표시값과 `risk_free_source` 표기로 흘러감(하류 `analytics.sharpe_ratio`의 자체 가드는 계산 자체만 보호, 표시값은 별개 관심사) | `_opt_decimal`의 NaN/Infinity 가드(W-3)에 더해 range 위반 시 `None` 반환 |
+| W-3 | `_opt_decimal`이 `Decimal("NaN")`/`Decimal("Infinity")`를 예외 없이 통과시킴(`InvalidOperation`만으로는 못 막음) → `fetch_exchange_rate`/`_fetch_buying_power` 등에서 NaN이 그대로 전파(C-8의 근본 원인 중 하나) | `d.is_finite()` 체크 추가 |
+| W-4 | `candles_to_series`가 **첫 캔들의 `currency`만** 보고 전 구간 환산 여부 결정 — 첫 원소에 키가 없으면 나머지가 USD여도 환산 생략 | `any(c.get("currency")=="USD" for c in candles)`로 전체 판정 |
+| W-7 | 현금 `ValidationError` 로그(`toss_client.py`/`mock_client.py`)가 예외 객체를 그대로 `%s`로 찍어 잔액(`input_value`)이 평문 로그에 남음 — 계좌번호는 마스킹하면서 잔액은 노출 | `type(e).__name__`만 로그 |
+| W-8 (부분) | `httpx.Client`가 어디서도 닫히지 않고, `MockBrokerClient.__init__`이 실제 호출 여부와 무관하게 항상 새 클라이언트를 생성 | `TossSecuritiesClient._http`를 지연 생성 프로퍼티로 전환(setter 겸용이라 테스트의 MockTransport 주입도 그대로 동작). `close()`/앱 수명주기 연동은 Phase 8(app.py)에서 결정 — 미해결로 이월 |
+| W-9 | `bootstrap()`/가격·벤치마크 정상 경로/토큰 발급 실패 플래그 설정/`account_ctx` 가드에 자동 테스트가 전무 (커버리지 78%) | 해당 경로 테스트 추가, `api/toss_client.py` 커버리지 87%로 개선 |
+| W-10 | `_to_holding(row, meta)`의 `meta` 인자가 죽은 매개변수(항상 `None`, 본문 미사용) — API_DESIGN §4.6 원본은 `classify(row, meta)`를 넣는 자리였지만 분류를 services로 미룬 결정과 어긋남 | 매개변수 삭제, `_to_holding(row)`로 단순화 |
+| W-11 | `resolve_account`가 `accounts` 원소 타입을 검사하지 않아, 원소가 문자열이면 리스트 컴프리헨션에서 `AttributeError` | `isinstance(a, dict)` 가드 추가 |
+| W-12 | `BrokerClient` Protocol이 `@runtime_checkable`이 아님 (Phase 4 W-11에서 "Phase 6에서 같이 확인"하기로 이월된 항목) | `api/base.py`에 `@runtime_checkable` 추가 |
+| W-5/W-6 (미해결, 사용자 판단 필요) | `throttle.before()`가 `_request` 진입 시 1회만 호출돼 401 재발급·429 대기·500 백오프로 인한 재시도가 스로틀 게이트를 우회함(W-5). 재시도 예산(`MAX_RETRIES=3`)이 401/429/500 실패 유형 전체가 공유해서, 예를 들어 401→429→500 순으로 겹치면 500 백오프가 0회 시도되고 바로 포기함(W-6). **둘 다 API_DESIGN §12.3 샘플 코드 자체의 구조를 그대로 옮긴 결과이며, 문서 자체의 설계라 이번엔 임의로 재설계하지 않음** | 미수정. Phase 7(services) 착수 전 재시도 아키텍처를 문서대로 유지할지 재설계할지 사용자 확인 필요 |
+| S-1 (미해결) | 가격 데이터 부족으로 제외된 종목(`excluded_tickers`)이 `fetch_price_history`의 반환값(DataFrame만, `api/base.py` Protocol 그대로 유지)에 실리지 않아 상류(Phase 7/8)가 "어떤 종목이 왜 빠졌는지" 화면에 경고할 방법이 없음(`RiskMetrics.excluded_tickers` 필드는 이미 존재) | Phase 7 `services/dashboard_service.py` 착수 시 반환 구조(예: `(DataFrame, list[str])`로 확장할지) 결정 필요 |
+| S-5 (Phase 5 S-3 재확인) | `internal-error`/`unsupported-symbol`/`stock-not-found`/`invalid-request`/`account-header-required`는 여전히 `_CODE_TO_EXCEPTION`에 없어 일반 `BrokerAPIError`(code만 보존). `ip-not-allowed`(유동 IP 환경에서 Phase S·4 각 1회씩 실제로 겪은 에러, state.md 기록)도 미매핑. §12.3이 `.code` 원본 문자열로 재시도 판단을 이미 하고 있어 기능상 문제는 없다고 재확인 — 의도적으로 손대지 않음 | 변경 없음. "미지의 코드"와 "알려졌지만 의도적으로 미매핑"이 구분 안 되는 것은 여전히 열린 사안 |
 
 ## phase-inspector 발견 → 수정 완료 항목
 | # | 문제 | 조치 |
@@ -116,7 +149,8 @@
 | git 커밋/푸시 | 사용자가 Phase 1부터 매 phase 종료 시 state.md 갱신 → phase-inspector 실행 → git commit & push를 명시적으로 요청함 (2026-08-27). Phase 1 커밋 후 `git push`가 auto mode 분류기에 막혀 사용자가 직접 push함. 이후 사용자가 `.claude/settings.local.json`에 `Bash(git push*)` 허용 규칙을 직접 추가(내가 그 파일을 쓰는 것조차 분류기가 막아서 사용자가 직접 처리) → **Phase 2 커밋에서 자동 push 최초 테스트 예정** |
 | Phase 2 관문 명령과 실제 `.env` 상태 불일치 | TDD_PLAN 관문 2는 "`.env`가 없는 상태"를 전제로 `settings.has_broker_credentials` → `False`를 기대하지만, Phase S에서 만든 진짜 `.env`(실계좌 키)가 프로젝트에 이미 존재해 문자 그대로 실행하면 `True`가 나온다(정상 — 실 자격증명이 올바르게 인식된다는 뜻). 실제 `.env`는 건드리지 않고, 테스트와 관문 검증 모두 `Settings(_env_file=None)`으로 "env 없음" 상태를 명시적으로 재현해 검증함 |
 | `config.py` / `config/` 이름 충돌 | 프로젝트 루트에 설정 모듈 `config.py`와 자산군 매핑 폴더 `config/`가 동시에 존재(TRD §3 명시). `config.py`가 없는 상태에서는 `config/`가 네임스페이스 패키지로 잡혀 `from config import Settings`가 실패했다. `config.py` 생성 후에는 CPython이 동일 디렉토리에서 일반 모듈을 네임스페이스 패키지보다 우선하므로 정상 해결됨. **위험 조건은 "Phase 3 일반"이 아니라 정확히 "`config/__init__.py` 생성" 단일 조건**(phase-inspector가 실측 검증) — `config/README.md`에 금지 경고 문서화함. `asset_class_map.yaml`만 추가하는 것은 안전 확인됨 |
-| `config.py` 시크릿 타입 | `toss_client_secret`/`anthropic_api_key`를 `pydantic.SecretStr`로 격상 (TRD §5.3 샘플코드는 평문 `str`이지만 사용자가 보안 우선으로 결정, 2026-08-27). Phase 4(API 클라이언트) 구현 시 `.get_secret_value()` 호출 필요함을 유의 |
+| `config.py` 시크릿 타입 | `toss_client_secret`/`anthropic_api_key`를 `pydantic.SecretStr`로 격상 (TRD §5.3 샘플코드는 평문 `str`이지만 사용자가 보안 우선으로 결정, 2026-08-26). Phase 4(API 클라이언트) 구현 시 `.get_secret_value()` 호출 필요함을 유의 |
+| `_to_holding`이 `items[].marketValue.amount` 등 `{krw,usd}` Price 딕셔너리를 전혀 읽지 않음 (Phase 6, phase-inspector 검토로 확정) | `Holding.market_value_native`가 `@computed_field`(수량×현재가로 직접 계산)라 애초에 API의 marketValue를 입력받지 않는다. `Portfolio.total_value`도 holdings에서 bottom-up 계산. 따라서 TDD_PLAN T-6.1 #2·#3("marketValue.amount.usd == null")이 문자 그대로는 이 코드베이스에서 검증 대상이 없다 — **API_DESIGN §4.3 필드 매핑표(`market_value_native ← items[].marketValue.amount`)와 Phase 1 모델 설계가 애초에 어긋나 있었던 것**(Phase 1에서 이미 계산값으로 확정, 이번 세션에서 재변경하지 않음). "널 가능 금액 필드가 죽지 않아야 한다"는 위험3의 취지는 실제로 값이 null일 수 있는 buying-power `cashBuyingPower`(§5.4)로 재해석해 테스트함(`TestBuyingPowerNullGuard`). `Decimal("NaN")`처럼 null은 아니지만 위험한 값에 대한 진짜 방어(W-3)는 별도로 추가함. **문서(TDD_PLAN/API_DESIGN) 정정 여부는 사용자 판단 필요** — 코드는 바꾸지 않음 |
 
 ## 아직 열려있는 것 (다음 세션/Phase에서 판단)
 phase-inspector가 발견했으나 이번엔 손대지 않은 항목 — 차단 사유는 아니고, 사용자 승인 후 처리 권장:
@@ -125,23 +159,28 @@ phase-inspector가 발견했으나 이번엔 손대지 않은 항목 — 차단 
 - **S-1 (Phase 1)**: `Portfolio.account_no`에 숫자가 0개면 빈 문자열이 조용히 통과 (`Field(min_length=1)` 검토)
 - **W-5 (Phase 3)**: `AllocationBreakdown.weight_sum`이 계산만 하고 검증·경고가 없음. DATA_DESIGN §6은 "비중합계 1.0±0.001 위반 시 경고 로그, 재정규화 후 진행"을 요구(ValidationError가 아니라 경고이므로 pydantic validator로 강제하는 게 맞는지도 확인 필요). `build_allocation` 경로는 항상 정확하지만, 모델이 외부(캐시 역직렬화 등)에서 직접 생성될 때 방어가 없음
 - **S-1 (Phase 3)**: `load_classifier_config`가 정식 기본 경로 상수(`DEFAULT_CONFIG_PATH` 등)를 노출하지 않아, 나중에 호출부(services/)가 `"config/asset_class_map.yaml"`을 하드코딩하게 될 수 있음
-- **S-6 (Phase 3, 검토 후 유지하기로 함)**: `classify()`의 `holding_row["symbol"]`이 키 없으면 `KeyError`를 던짐 — DATA_DESIGN §5.3 원문 그대로. API_DESIGN §4.6의 `_to_holding` 래퍼가 이미 이런 예외를 잡아 해당 종목만 건너뛰므로, 상위 호출 경로가 보호되는 한 classify() 자체를 `.get()`으로 바꾸지 않기로 함 — Phase 6에서 `_to_holding` 구현 시 재확인
+- **S-6 (Phase 3, 검토 후 유지하기로 함)**: `classify()`의 `holding_row["symbol"]`이 키 없으면 `KeyError`를 던짐 — DATA_DESIGN §5.3 원문 그대로. **Phase 6에서 재확인**: `_to_holding`은 `classify()`를 아예 호출하지 않는 방향(services 레이어 책임)으로 확정돼 이 우려 자체가 무의미해짐. `_to_holding`은 여전히 `(KeyError, ...)`로 자체 방어함
 - **(Phase 2) TDD_PLAN.md 관문 2 문구**: "`.env`가 없는 상태에서"라는 전제가 Phase S 실행 이후로는 이 저장소에서 영구히 성립하지 않음. 문서 자체를 고칠지는 사용자 판단 필요(코드 변경 아님)
 - **(Phase 2) `.env`의 `ANTHROPIC_API_KEY`**: 아직 `sk-ant-xxxxx` 플레이스홀더 그대로. Phase 6(AI 코멘트) 착수 전 실제 키로 교체 필요
 - **Red/Green 커밋 분리**: Phase 2·3·4 모두 미이행 (위 표 참고). TDD_PLAN상 Phase 4의 T-4.1~4.3은 애초에 "테스트 파일 없음"으로 설계돼 있어 이번엔 계획 자체가 구현 우선이었지만, 관문 테스트(T-4.4)와 구현이 같은 커밋으로 묶인 것은 동일한 패턴. 계속 포기할지 사용자 판단 필요
 - ~~**W-2 (Phase 4)**: `data/cache/token.json` 쓰기가 비원자적~~ **Phase 5에서 해결.** `token_store.py`에 임시파일+`os.replace()` 도입 — 단, 1차 구현은 Windows에서 다른 프로세스가 대상 파일을 열고 있으면 `PermissionError`로 크래시하는 새 실패 모드를 만들었고(C-1), phase-inspector가 잡아내 저장 전체를 `try/except OSError`로 감싸 "실패해도 예외 없이 다음 호출에서 재발급"으로 최종 정리함
 - **W-6/W-7 (Phase 4)**: `MockBrokerClient.__init__`이 샘플 파일 없음/손상 시 그대로 크래시함(폴백 클라이언트의 생성 자체가 실패하면 FR-104 경로 전체가 무너짐). `DEFAULT_SAMPLE_PATH`가 여전히 상대경로라 `streamlit run`을 다른 CWD에서 실행하면 못 찾음 — Phase 1 S-1(하드코딩 경로)과 같은 계열. (`TOKEN_PATH`는 Phase 5에서 `Path(__file__)` 기준 절대경로로 이미 전환됨 — 이 항목은 `DEFAULT_SAMPLE_PATH`에만 해당)
-- **W-8 (Phase 4)**: `fetch_price_history`에서 환율 조회 실패 시 `fx = Decimal(1)`로 폴백해 USD 가격을 원화인 것처럼 시계열에 넣음. DATA_DESIGN §3.2는 "환율 실패 → USD 종목 시계열에서 제외 + 경고"를 요구. 목업은 항상 샘플 환율이 있어 지금은 발현 안 되지만, 이 코드가 Phase 6 `toss_client.py`로 흡수되면 실제로 문제될 수 있음
+- ~~**W-8 (Phase 4)**: `fetch_price_history`에서 환율 조회 실패 시 `fx = Decimal(1)`로 폴백~~ **Phase 6에서 해결.** 예고된 대로 실제로 문제가 됐었다(Phase 6 C-4로 재발견) — 캔들 자체의 `currency`로 USD 여부를 판정해 환율 없으면 제외+경고로 수정
 - ~~**W-9 (Phase 4)**: 토큰 발급/캐싱 로직 이중 소스~~ **Phase 5에서 해결.** `mock_client.py`의 private 함수를 지우고 `api.token_store`로 흡수 완료. C-4에서 고친 가드(손상 파일 처리)도 `token_store.py`에 승계됨
-- **W-10 (Phase 4)**: 가격 시계열 인덱스가 `DatetimeIndex`가 아니라 `datetime.date`의 object dtype Index. DATA_DESIGN §3.1은 `DatetimeIndex`를 명시하지만 실측 결과 object Index로 동작함 — Phase 6/7에서 실제 문제가 되면(예: 날짜 연산) 그때 정규화
-- **W-11 (Phase 4)**: `BrokerClient` Protocol이 `@runtime_checkable`이 아니고, `MockBrokerClient`가 Protocol 준수를 검증하는 장치(타입체커·테스트)가 없음. Phase 6에서 `TossSecuritiesClient` 추가 시 같이 확인
+- **W-10 (Phase 4)**: 가격 시계열 인덱스가 `DatetimeIndex`가 아니라 `datetime.date`의 object dtype Index. DATA_DESIGN §3.1은 `DatetimeIndex`를 명시하지만 실측 결과 object Index로 동작함 — Phase 6에서도 그대로 유지(문제 미발현). Phase 7에서 실제 문제가 되면 그때 정규화
+- ~~**W-11 (Phase 4)**: `BrokerClient` Protocol이 `@runtime_checkable`이 아님~~ **Phase 6에서 해결.** `api/base.py`에 `@runtime_checkable` 추가(Protocol 준수를 강제하는 테스트는 여전히 없음 — 필요성 낮다고 판단해 미작성)
 - **S-2 (Phase 4)**: `MockBrokerClient.fetch_portfolio()`의 `account_no="00000000000"`이 실계좌(`*******5597`)와 구분이 잘 안 되는 임의값. `"(샘플)"`처럼 명백히 가짜인 문자열로 바꿀지 사용자 판단 필요
+- **W-5/W-6 (Phase 6, 사용자 판단 필요)**: `TossSecuritiesClient._request`의 재시도 아키텍처가 API_DESIGN §12.3 샘플 구조를 그대로 따른다 — `throttle.before()`가 요청 진입 시 1회만 호출돼 401/429/500 재시도가 스로틀 게이트를 우회하고(NFR-105 보장 약화), `MAX_RETRIES=3`이 401 재발급·429 대기·500 백오프 전체가 나눠 쓰는 공용 예산이라 여러 실패가 겹치면 일부 유형이 재시도를 못 받고 포기함. 문서 자체의 설계라 이번엔 임의로 재설계하지 않음 — Phase 7 착수 전 재확인 필요
+- **S-1 (Phase 6)**: `fetch_price_history`에서 유효 데이터 부족·조회 실패로 제외된 종목이 `excluded_tickers`로 상류에 전달되지 않음(`api/base.py` Protocol을 `DataFrame`만 반환하도록 그대로 유지했기 때문). `RiskMetrics.excluded_tickers` 필드는 이미 있으므로 Phase 7에서 반환 구조를 확장할지 결정 필요
+- **S-5 (Phase 5 S-3, Phase 6에서 재확인 후 유지)**: `internal-error`/`unsupported-symbol`/`stock-not-found`/`invalid-request`/`account-header-required`/`ip-not-allowed`가 여전히 `_CODE_TO_EXCEPTION`에 없음. `.code`가 보존되고 `_request`가 이미 원본 코드 문자열로 재시도를 분기하므로 기능상 문제는 없다고 재확인 — 의도적으로 손대지 않음
 
 ## 알려진 이슈
 - 스모크 테스트 스크립트 콘솔 출력에서 한글 요약 문구가 인코딩 문제로 깨짐 (Windows 콘솔 코드페이지 이슈로 추정). 기능 결과(JSON)에는 영향 없음. 스크립트는 스크래치패드에만 존재하며 커밋 대상 아님
 
 ## 다음 시작 지점
-`docs/TDD_PLAN.md` **Phase 6 (`api/toss_client.py` — 실계좌 연동)**부터 진행. Phase 5에서 만든 `api/errors.py`(`error_for_code`, `BrokerAPIError(message, *, code=)`)와 `api/throttle.py`(`AdaptiveThrottle`), `api/token_store.py`(`load_token`/`save_token`)를 그대로 소비한다. Phase 6 착수 시 참고할 것:
+`docs/TDD_PLAN.md` **Phase 7 (`services/dashboard_service.py`)**부터 진행. `api/toss_client.py`의 `TossSecuritiesClient`(전 메서드 구현 완료, 실계좌로 관문 6 통과)와 `api/mock_client.py`의 `MockBrokerClient`(가격 히스토리는 내부적으로 `TossSecuritiesClient`에 위임)를 그대로 소비한다. Phase 7 착수 시 참고할 것:
+- **classify() 호출 위치**: Phase 3/4/6에 걸쳐 "분류는 services 레이어 책임"으로 일관되게 결정돼 있다. `api/` 계층의 `fetch_portfolio()`들은 `Holding.asset_class`를 항상 `OTHER`(기본값)로 둔 채 반환하므로, Phase 7이 `fetch_stock_meta()` + `classify()`를 조합해 `holding.asset_class`를 채워야 한다. 참고 패턴: `tests/test_mock_client.py`의 `classified_portfolio` fixture(정리 대상으로 이미 표시돼 있었음 — Phase 7에서 이 조합 로직이 서비스로 옮겨가면 그 fixture는 서비스 호출로 교체)
+- **W-5/W-6 (Phase 6, 열린 항목)**: `TossSecuritiesClient._request`의 재시도가 스로틀을 우회하고, 재시도 예산이 실패 유형 간 공유되는 문제. Phase 7에서 여러 단계를 오케스트레이션하며 실제로 재시도가 자주 겹치는 상황(예: 20종목 캔들 루프 중 401+429 동시 발생)이 생기면 이 설계를 재검토할지 결정 필요
+- **S-1 (Phase 6, 열린 항목)**: `fetch_price_history`가 제외 종목 목록을 반환하지 않음. `RiskMetrics.excluded_tickers`(FR-204)를 채우려면 `api/base.py` Protocol 자체를 확장할지, 아니면 로그만으로 충분하다고 볼지 결정 필요
+- W-6(Phase 5, 열린 항목, Phase 6에서도 미해결): NFR-304 사용자 메시지 매핑(API_DESIGN §16)을 `errors.py`에 둘지 `services`/`ui`에 둘지 결정 필요 — Phase 7이 예외를 처음 소비하는 지점이므로 지금 결정해야 함
 - W-3(Phase 5) 결정에 따라 `BrokerAPIError`/하위 클래스를 raise할 때 메시지는 위치 인자, 에러코드는 `code=` 키워드로 넘길 것 (`RateLimitError("메시지", code="rate-limit-exceeded")`)
-- W-6(Phase 5, 열린 항목): NFR-304 사용자 메시지 매핑(API_DESIGN §16)을 `errors.py`에 둘지 `services`/`ui`에 둘지 이번에 결정 필요
-- S-3(Phase 5, 열린 항목): `internal-error`/`unsupported-symbol`/`stock-not-found`/`invalid-request`/`account-header-required` 등은 `error_for_code`에서 전부 일반 `BrokerAPIError`(code만 보존)로 나옴 — §12.3 재시도 판단 시 `.code` 문자열로 분기할 것

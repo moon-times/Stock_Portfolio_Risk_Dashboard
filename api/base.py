@@ -1,5 +1,5 @@
 from decimal import Decimal
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import pandas as pd
 
@@ -7,6 +7,7 @@ from models.portfolio import Portfolio
 from models.stock_meta import StockMeta
 
 
+@runtime_checkable
 class BrokerClient(Protocol):
     def fetch_portfolio(self) -> Portfolio:
         """보유 종목 + 현금 + 일간손익을 조회해 Portfolio를 반환한다."""

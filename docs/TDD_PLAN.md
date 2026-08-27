@@ -407,9 +407,9 @@ python -c "from api.toss_client import ...; print(client.fetch_portfolio())"
 python -c "from api.toss_client import ...; print(client.fetch_portfolio())"
 ```
 
-- [ ] 실계좌(VOO) 잔고가 조회된다
-- [ ] **2회차에 토큰 재발급이 없다** (AT-09)
-- [ ] 계좌번호가 마스킹되어 출력된다 (AT-08)
+- [x] 실계좌(VOO) 잔고가 조회된다 (2026-08-27 확인)
+- [x] **2회차에 토큰 재발급이 없다** (AT-09) — 스크래치패드 스크립트 2회 연속 실행, `token.json`의 `expires_at` 불변 확인
+- [x] 계좌번호가 마스킹되어 출력된다 (AT-08) — `*******5597`
 
 ---
 

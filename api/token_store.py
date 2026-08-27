@@ -61,7 +61,11 @@ def save_token(access_token: str, expires_in: float) -> None:
         except (NotImplementedError, OSError):
             pass  # Windows: POSIX 권한 미지원. .gitignore + 단일 사용자 PC 전제로 대체
         os.replace(tmp_path, TOKEN_PATH)
-    except OSError as e:
+    except (OSError, ValueError, TypeError) as e:
+        # ValueError/TypeError: expires_in이 float() 불가능한 값(서버 응답 이상)일 때.
+        # 이미 발급받은 access_token 자체는 유효하므로, 저장만 실패했다고 해서
+        # 호출부(api/toss_client.py._fetch_new_token)가 발급 자체를 실패로
+        # 간주해 토큰을 버리면 안 된다 (위험 1 — 멀쩡한 토큰 낭비).
         logger.warning("토큰 캐시 저장 실패, 다음 호출에서 재발급됨: %s", type(e).__name__)
     finally:
         tmp_path.unlink(missing_ok=True)
