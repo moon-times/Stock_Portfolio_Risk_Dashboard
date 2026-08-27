@@ -1,18 +1,22 @@
 ---
 name: project-phase1-audit-baseline
-description: Phase 1 (models/) audit outcome and the reusable audit techniques that surfaced real defects — pytest pythonpath gate failure, coverage-of-guard-branches-only, uncommitted Red step
+description: Reusable phase-audit techniques for this repo (gate command, coverage, Red-commit location, env-var isolation, name-collision probe) and which past defects each one caught
 metadata:
   type: project
 ---
 
-Phase 1 (`models/`) audited 2026-08-27. Result: CONDITIONAL PASS. The three techniques below each found a defect that reading the code alone did not, so reuse them every phase.
+Audit techniques that have each caught a real defect in this repo. Run all of them every phase. Last revised after the Phase 2 (`config.py`) audit, 2026-08-27.
 
-1. **Run the gate command *literally as written*, not via `python -m pytest`.** `pytest.ini` has no `pythonpath` and there is no root `conftest.py`, so `pytest tests/test_models.py` fails with `ModuleNotFoundError: No module named 'models'`; only `python -m pytest` (which injects cwd) passes. Every phase gate in TDD_PLAN is written in the bare form, so this will keep producing false "gate passed" claims until fixed.
+1. **Run the gate command *literally as written*, and also re-run it in a clean scratch dir.** Gates in TDD_PLAN assume a pristine environment that no longer exists locally. Phase 2's gate assumes no `.env`, but a real `.env` from Phase S sits in the repo root, so the literal command prints `True` instead of `False`; copying `config.py` to an empty scratch dir and re-running printed `False` and proved the implementation correct. Always separate "gate text is stale" from "implementation is wrong".
+   - *Resolved*: the Phase 1 finding that bare `pytest tests/...` failed with `ModuleNotFoundError` is **fixed** — `pytest.ini` now has `pythonpath = .`. Bare `pytest` works. Do not re-report it.
 
-2. **Always run `--cov=<pkg> --cov-report=term-missing`, not just the pass count.** Phase 1's 12/12 green hid that every uncovered line was the *success* branch (FX conversion, non-zero P&L, valid square matrix). The required-test table in TDD_PLAN §5 only enumerates guard/None cases, so a spec-complete test suite can still leave the happy path unverified.
+2. **Always run `--cov=<target> --cov-report=term-missing`, and verify coverage actually collected data.** Phase 1: 12/12 green hid that only guard branches were covered. Phase 2: `--cov=config` silently reported "No data was collected" rather than failing. A "no data" warning is not a failure — treat it as an audit finding, not noise.
 
-3. **Check whether the phase's Red step exists in git at all.** Phase 1's `tests/` and `models/` were entirely untracked at audit time, while commit `5d3d846 "phase_1_over"` contained only Phase 0 scaffolding — so Red→Green was unverifiable from history and had to be inferred from file mtimes and `.pytest_cache/v/cache/nodeids`.
+3. **Check whether the phase's Red step exists in git at all.** Both Phase 1 and Phase 2 shipped with the test + implementation entirely untracked, so Red→Green was unverifiable from history and had to be inferred from file mtimes (test file mtime earlier than impl file mtime) and `.pytest_cache/v/cache/nodeids`. This is a recurring pattern, not a one-off.
+   - Caution: `.pytest_cache/v/cache/lastfailed` is overwritten by *your own* audit runs. Read it before running anything, or you will misattribute your own failure to the developer's Red step.
 
-**Why:** the project mandates 엄격 TDD for `models/` and `analytics/`, and gates are defined as "명령을 실행해서 참/거짓이 나와야 한다" — a gate that only passes under a non-canonical invocation defeats that definition.
+4. **Probe env-var isolation on any test that asserts a "nothing configured" default.** `Settings(_env_file=None)` disables the dotenv file but *not* OS environment variables. Re-running the suite with the relevant vars exported (`TOSS_CLIENT_ID=... pytest`) flipped a passing test to failing, which is how the plaintext-secret-in-assertion-repr issue was found. See [[project-config-name-collision]] and [[project-spec-doc-conflicts]].
 
-**How to apply:** open every audit with (a) the literal gate command, (b) a coverage run, (c) `git log`/`git status` to locate the Red commit. Related doc-level traps in [[project-spec-doc-conflicts]].
+**Why:** the project mandates 엄격 TDD for `models/` and `analytics/`, and gates are defined as "명령을 실행해서 참/거짓이 나와야 한다" — a gate that only passes under a non-canonical invocation, or in one particular developer's working directory, defeats that definition.
+
+**How to apply:** open every audit with (a) the literal gate command plus a clean-room re-run, (b) a coverage run whose data collection you confirm, (c) `git log`/`git status` to locate the Red commit, (d) hostile-environment re-runs of default-value tests.
