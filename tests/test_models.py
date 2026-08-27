@@ -5,8 +5,8 @@ import pytest
 from pydantic import ValidationError
 
 from models.commentary import Commentary
-from models.holding import Currency, Holding, MarketCountry
-from models.metrics import CorrelationMatrix, RiskMetrics
+from models.holding import AssetClass, Currency, Holding, MarketCountry
+from models.metrics import AllocationBreakdown, AllocationItem, CorrelationMatrix, RiskMetrics
 from models.portfolio import Portfolio
 from models.stock_meta import StockMeta
 
@@ -132,6 +132,42 @@ class TestCorrelationMatrixSquare:
     def test_valid_square_matrix_succeeds(self):
         m = CorrelationMatrix(labels=["A", "B"], values=[[1.0, 0.5], [0.5, 1.0]])
         assert m.labels == ["A", "B"]
+
+
+class TestAllocationItemWeight:
+    def test_weight_above_one_raises(self):
+        with pytest.raises(ValidationError):
+            AllocationItem(
+                asset_class=AssetClass.DOMESTIC_EQUITY,
+                market_value=Decimal("1000"),
+                weight=1.5,
+            )
+
+    def test_weight_below_zero_raises(self):
+        with pytest.raises(ValidationError):
+            AllocationItem(
+                asset_class=AssetClass.DOMESTIC_EQUITY,
+                market_value=Decimal("1000"),
+                weight=-0.1,
+            )
+
+
+class TestAllocationBreakdownWeightSum:
+    def test_weight_sum_reflects_items(self):
+        items = [
+            AllocationItem(
+                asset_class=AssetClass.DOMESTIC_EQUITY,
+                market_value=Decimal("600"),
+                weight=0.6,
+            ),
+            AllocationItem(
+                asset_class=AssetClass.CASH,
+                market_value=Decimal("400"),
+                weight=0.4,
+            ),
+        ]
+        breakdown = AllocationBreakdown(items=items, total_value=Decimal("1000"))
+        assert breakdown.weight_sum == pytest.approx(1.0)
 
 
 class TestRiskMetricsAllNone:

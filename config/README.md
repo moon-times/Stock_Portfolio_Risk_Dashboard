@@ -1,6 +1,6 @@
 # config/ (자산군 매핑, Phase 3)
 
-`asset_class_map.yaml`이 여기 들어갈 예정이다 (DATA_DESIGN.md §5.2).
+`asset_class_map.yaml` — 자동 분류(`analytics/classifier.py`)가 참고하는 오버라이드·ETF 하위분류 키워드 매핑 (DATA_DESIGN.md §5.2).
 
 **이 디렉토리에 `__init__.py`를 추가하지 마세요.**
 

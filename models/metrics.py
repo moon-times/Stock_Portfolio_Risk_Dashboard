@@ -1,7 +1,25 @@
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
+
+from models.holding import AssetClass
+
+
+class AllocationItem(BaseModel):
+    asset_class: AssetClass
+    market_value: Decimal
+    weight: float = Field(ge=0, le=1)
+
+
+class AllocationBreakdown(BaseModel):
+    items: list[AllocationItem]
+    total_value: Decimal
+
+    @computed_field
+    @property
+    def weight_sum(self) -> float:
+        return sum(i.weight for i in self.items)
 
 
 class RiskMetrics(BaseModel):
