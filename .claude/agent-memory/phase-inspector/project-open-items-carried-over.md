@@ -20,6 +20,13 @@ Confirmed instances:
   `api/base.py::BrokerClient` structurally, but no test or type-checker asserts it. Still open.
 - **S-3 (Phase 5)** (`internal-error` etc. unmapped in `_CODE_TO_EXCEPTION`) — Phase 6 relies on raw
   `.code` string comparison, so it works, but the open item was never closed or restated.
+- **Phase 7 (2026-08-28)**: S-1 (excluded tickers) and W-6 (§16 message mapping location) *were* both
+  closed properly. But three items recurred: (a) the whole phase was again untracked at review time —
+  same as Phase 6's own C-9, which had promised "이번 세션에서 커밋"; (b) `state.md` again still said
+  "Phase 6 완료 / 다음 시작 지점 Phase 7"; (c) `tests/test_mock_client.py`'s `classified_portfolio`
+  fixture, flagged since Phase 4 as "Phase 7에서 서비스 호출로 교체할 정리 대상", was untouched.
+  W-5/W-6 (retry vs throttle architecture), which state.md said needed a user decision *before*
+  Phase 7 started, was neither decided nor mentioned.
 
 **Why:** the open-item list is written by the auditor at the moment of deepest context, so it is the
 single highest-signal defect predictor available; letting it decay to a to-do graveyard wastes it.

@@ -21,6 +21,19 @@ Re-confirmed and extended at the Phase 6 audit (2026-08-27), `api/toss_client.py
 - **`fetch_stock_meta`** catches `(KeyError, ValidationError)` but non-dict rows raise `TypeError` — the sibling `_to_holding` has the right 4-tuple. Asymmetry again.
 - `Decimal(str(v))` **never raises** for `"NaN"`/`"Infinity"` — it returns `Decimal('NaN')`/`Decimal('Infinity')`. So `_opt_decimal`-style helpers that only catch `InvalidOperation` let NaN through into money fields and risk-free rates. Pydantic then rejects it downstream with `finite_number`, which can silently trigger a lossy fallback branch.
 
+Phase 7 audit (2026-08-28) found the **opposite-direction** version of the same defect, in `services/dashboard_service.py`: over-narrowing. Know the taxonomy in `api/errors.py`:
+
+```
+DashboardError
+├── BrokerAPIError → AuthenticationError, AccountNotFoundError, RateLimitError, MaintenanceError
+├── ExchangeRateError        <- NOT a BrokerAPIError
+├── PriceDataError           <- NOT a BrokerAPIError
+├── InsufficientDataError    <- NOT a BrokerAPIError
+└── AICommentaryError        <- NOT a BrokerAPIError
+```
+
+So `except BrokerAPIError` around a broker call misses the app's **own** dedicated exception for that exact call (`fetch_exchange_rate` → `ExchangeRateError`, benchmark → `PriceDataError`), and `except PriceDataError` around `fetch_price_history` misses `RateLimitError`. Probe confirmed 6/6 of these escape `DashboardService.load()`. `except DashboardError` is the correct single base at any api↔services boundary: complete, and still narrow enough to satisfy BLE001.
+
 The one correct reference is `API_DESIGN §4.6 _to_holding`: `(KeyError, ValidationError, InvalidOperation, TypeError)` + `logger.warning`. Cite it — it is the project's own answer — but note it still lacks `AttributeError`.
 
 **Why:** most of these live on FR-104 / NFR-201 / NFR-204 paths ("앱이 절대 크래시하면 안 된다"), so a missed exception type converts a graceful-degradation requirement into a hard failure, and the happy-path gate test never notices.

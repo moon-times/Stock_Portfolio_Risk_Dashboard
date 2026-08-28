@@ -24,10 +24,15 @@ Audit techniques that have each caught a real defect in this repo. Run all of th
 6. **Execute the spec's stated scenario yourself rather than trusting the test's name.** Phase 3's "cash is excluded from correlation" test omitted the cash *column* entirely; feeding an actual zero-variance column (the scenario the spec names) raised a `ValidationError`. Write a throwaway probe script for every doc-stated edge case and run it directly.
 
 7. **Run the project's own linter (`.venv/Scripts/python -m ruff check <new files>`).** Added Phase 4: ruff is in `requirements.txt` but appears never to be run. On `api/mock_client.py` it caught `DTZ005` (`datetime.now()` without tz) in one second — a finding I would otherwise have had to argue for. Cheap, zero false positives so far.
+   - **Phase 7: there is no `ruff.toml`/`pyproject.toml` in this repo, so "ruff clean" only means the default `E4,E7,E9,F` rules passed.** `BLE001` (blind except) and `ARG002` (dead parameter) are *not* enabled, so a session claiming "ruff flagged my blind except" is misremembering. Always re-run `ruff check --select BLE,ARG,TRY,RET,SIM` yourself — Phase 7 that immediately exposed `_load_benchmark_prices(self, warnings)` with `warnings` never used.
    - Phase 4 nodeids diff was clean (no deleted tests) — the weakened-test pattern did **not** recur, though only 5 tests were written at all.
    - Phase 5 nodeids diff also clean, and all 15 TDD_PLAN-mandated T-5.1/5.2/5.3 cases were present verbatim. Two clean phases in a row — the weakened-test pattern now looks resolved; keep checking, but stop treating it as the likeliest failure mode.
 
 8. **Coverage's one *missed* line is the highest-value line to read.** Added Phase 5: `api/throttle.py` hit 98%, and the single uncovered line was `time.sleep(self._min_interval - gap)` — the spacing mechanism that FR-201b actually depends on. Both tests exercising that path had passed `min_interval=0.0` to switch it off. A near-100% number with one miss is a pointer, not noise.
+
+9. **Spy on `socket.socket.connect` to find hidden network I/O in the test suite.** Added Phase 7. Paste into a probe script before importing app code:
+   `orig=socket.socket.connect; socket.socket.connect=lambda self,addr:(attempts.append(addr), (_ for _ in ()).throw(OSError()))`.
+   `tests/test_dashboard_service.py::TestEndToEndSmoke` made **59 live TCP connections** to the Toss API without `@pytest.mark.network` or a credential `skipif`, because `MockBrokerClient.fetch_price_history` delegates to the real `TossSecuritiesClient` (DATA_DESIGN §7). The suite still went green — offline the test degrades to a vacuous one. `pytest.ini` already declares a `network` marker; grep for its use.
 
 **Why:** the project mandates 엄격 TDD for `models/` and `analytics/`, and gates are defined as "명령을 실행해서 참/거짓이 나와야 한다" — a gate that only passes under a non-canonical invocation, or against tests reshaped to fit the implementation, defeats that definition.
 

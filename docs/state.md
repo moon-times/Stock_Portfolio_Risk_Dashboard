@@ -1,4 +1,37 @@
-# 세션 상태 — 2026-08-27 (Phase 0 / Phase S / Phase 1 / Phase 2 / Phase 3 / Phase 4 / Phase 5 / Phase 6 완료, phase-inspector 검토·보정 반영)
+# 세션 상태 — 2026-08-28 (Phase 0~7 완료, phase-inspector 검토·보정 반영)
+
+## Phase 7 (2026-08-28) — `services/dashboard_service.py`
+
+`models/dashboard.py`(`DashboardData`, DATA_DESIGN §2.8 그대로) + `services/dashboard_service.py`(`DashboardService` 10단계 오케스트레이션 + `create_broker_client()`) + `tests/test_dashboard_service.py`(44개) 신규 작성. 관문 7(`python -c "DashboardService(settings).load()"`)을 목업 경로·실계좌 경로 양쪽에서 직접 실행해 확인함(샤프지수 각각 1.64/1.46, 비중합계 1.0, 예외 없음).
+
+**사용자가 이번 세션에서 확정한 결정 4가지**:
+1. `api/cached_client.py`(디스크 캐시 데코레이터)는 만들지 않음 — `create_broker_client()`가 `TossSecuritiesClient`/`MockBrokerClient`를 캐싱 래퍼 없이 그대로 반환. `st.cache_data(ttl=300)`가 서비스 레벨 캐싱을 담당(Phase 8 예정)
+2. AI 코멘트(`_generate_commentary()`)는 항상 `None`을 반환하는 스텁 — `ai/`는 Phase 9에서
+3. API_DESIGN §16(예외→사용자 메시지 매핑)은 `services/dashboard_service.py`(`_ERROR_MESSAGES`/`_message_for`)가 담당
+4. COMPONENT_DESIGN §2.1 의사코드의 단계 순서(`_compute_metrics`가 `_load_benchmark`보다 먼저)는 베타 계산에 벤치마크가 필요해 모순이므로, `_load_benchmark_prices` 헬퍼로 벤치마크를 가격히스토리 직후 로드해 두 메서드가 공유하도록 순서 재배치
+
+**구현 중 확인한 핵심 사실**: 두 `BrokerClient` 구현체를 직접 읽은 결과, `fetch_exchange_rate`/`fetch_stock_meta`/`fetch_benchmark_history`/`fetch_risk_free_rate`는 내부에서 이미 실패를 흡수하고 절대 밖으로 던지지 않는다(항상 안전한 sentinel 반환). 밖으로 던질 수 있는 건 `fetch_portfolio`(TossSecuritiesClient만, BrokerAPIError 계열)와 `fetch_price_history`(PriceDataError, 전종목 실패시)뿐. 서비스 레이어 except 절은 처음 `except Exception`으로 넓게 잡았다가 ruff BLE001 + 이 프로젝트의 "좁은 except" 관례에 맞춰 좁혔음.
+
+### phase-inspector 검토 — FAIL → Critical 3건 + Warning 다수 수정 완료
+
+| # | 문제 | 조치 |
+|---|---|---|
+| C-1 | `create_broker_client()`가 `(AuthenticationError, AccountNotFoundError)`만 잡아 `bootstrap()`이 던지는 `RateLimitError`/`MaintenanceError`/미매핑 코드/재시도 소진 시의 일반 `BrokerAPIError`에서 앱이 그대로 죽음(인터넷 단절·IP 미등록 시 실계좌 모드 첫 화면 크래시) | `except BrokerAPIError as e:`로 확대(모든 서브클래스 포함) |
+| C-2 | 서비스가 `_load_fx_rate()`로 얻은 환율과, 브로커가 `fetch_portfolio()` 내부에서 별도로 조회한 `portfolio.fx_rate`가 서로 달라 `portfolio.total_value`(후자 사용)와 `allocation.total_value`(전자 사용)가 최대 6.5배 어긋남 | `load()`에서 두 값을 단일 소스로 통합(`fx_rate is None`이면 `portfolio.fx_rate`로 복구, 아니면 `portfolio.fx_rate`를 덮어씀). 회귀 테스트 3건 추가, 실계좌로 `total_value == allocation.total_value` 확인 |
+| C-3 | FR-601("두 시계열 모두 첫값 100") 미충족 — `(1+returns).cumprod()*100`은 pct_change로 첫 행이 소실돼 첫 값이 `100*(1+r1)`이 됨 | 첫 행 기준 재정규화(`cum / cum.iloc[0] * 100`)로 두 컬럼 모두 정확히 100에서 시작하도록 수정. 회귀 테스트 추가(`test_both_series_start_at_100`) |
+| W-1 | 브로커 호출부 except가 `BrokerAPIError`로 좁혀져 있어 프로젝트 자신의 `ExchangeRateError`/`PriceDataError`/`InsufficientDataError`(전부 `BrokerAPIError`의 형제, DashboardError 직속)를 못 잡음 | `_load_fx_rate`/`_load_portfolio`/`_load_stock_meta`/`_load_risk_free_rate`/`_load_prices`/`_load_benchmark_prices` 전부 `except DashboardError`로 통일 |
+| W-2 | 목업 폴백 생성(`_load_portfolio`의 로컬 `MockBrokerClient(...)`)이 샘플 파일 손상/부재 시 그대로 크래시 — "최후의 안전망"이 스스로 터짐 | `except (OSError, ValueError)`로 감싸 실패 시 빈 `Portfolio(is_fallback=True)` 반환. 회귀 테스트 추가 |
+| W-3 | `_load_benchmark_prices(warnings)`의 `warnings` 매개변수가 죽은 인자 — 벤치마크 실패가 무경고 | 실패/빈 응답 모두 `warnings.append(_message_for(PriceDataError()))` 추가 |
+| W-4 | `_load_prices`가 "컬럼은 있는데 행이 0개"(종목 간 거래일 비중복) 케이스에서 `excluded_tickers=[]`로 잘못 판정 | `prices.empty` 체크를 컬럼 diff보다 먼저 수행하도록 순서 변경. 회귀 테스트 추가 |
+| W-5 | 관문 7 자동화 테스트(E2E 스모크)가 마커 없이 실네트워크(59회 TCP 연결)를 침 | 기존 `tests/test_mock_client.py` 관례대로 `@pytest.mark.network` + `skipif(not settings.has_broker_credentials)` 부착 |
+| W-6 | AT-11 단언이 `if sharpe_ratio is not None:` 조건부라 sharpe가 None이면 아무것도 검증 안 함 | 가격 데이터가 항상 존재하는 결정론적 FakeBroker 테스트에서 `assert sharpe_ratio is not None`을 먼저 단언하도록 변경 |
+| W-7 | §16 매핑표(`_message_for`) 자체를 검증하는 테스트가 없었음 | `TestErrorMessageMapping` 신설 — 8종 예외 매핑 + 미지 예외 폴백 + 원본 메시지 비노출(NFR-304) parametrize 테스트 |
+
+**의도적으로 손대지 않은 것**: `tests/test_mock_client.py`의 `classified_portfolio` fixture(정리 대상으로 예고됐으나 이번 요청 범위 밖), `api/toss_client.py`의 재시도/스로틀 아키텍처(W-5/W-6 Phase 6), `_load_stock_meta` 실패 시 무경고(§2.2 표가 명시적으로 "경고 없음"으로 설계했으므로 임의로 추가하지 않음 — 필요하면 사용자 확인 후), analytics 함수 호출부의 넓은 `except Exception`(Phase 3에서 이미 무크래시 검증됨 + W-10 object dtype Index 방어용으로 의도적 유지).
+
+**커밋 상태**: 이번 Phase도 테스트/구현이 분리 커밋되지 않음(Red/Green 이력 부재, Phase 6에서 C-9로 이미 지적된 패턴 재발). phase-inspector가 재지적함 — 계속 미해결.
+
+
 
 ## 이번 세션에서 한 일
 - **Phase 0 (골격)**: `models/ api/ analytics/ ai/ services/ ui/ config/ data/ tests/` 디렉토리 생성, `requirements.txt`·`.gitignore`·`.env.example`·`pytest.ini` 작성. `.venv` 가상환경 생성 후 의존성 설치. 관문 0 통과
@@ -171,16 +204,21 @@ phase-inspector가 발견했으나 이번엔 손대지 않은 항목 — 차단 
 - ~~**W-11 (Phase 4)**: `BrokerClient` Protocol이 `@runtime_checkable`이 아님~~ **Phase 6에서 해결.** `api/base.py`에 `@runtime_checkable` 추가(Protocol 준수를 강제하는 테스트는 여전히 없음 — 필요성 낮다고 판단해 미작성)
 - **S-2 (Phase 4)**: `MockBrokerClient.fetch_portfolio()`의 `account_no="00000000000"`이 실계좌(`*******5597`)와 구분이 잘 안 되는 임의값. `"(샘플)"`처럼 명백히 가짜인 문자열로 바꿀지 사용자 판단 필요
 - **W-5/W-6 (Phase 6, 사용자 판단 필요)**: `TossSecuritiesClient._request`의 재시도 아키텍처가 API_DESIGN §12.3 샘플 구조를 그대로 따른다 — `throttle.before()`가 요청 진입 시 1회만 호출돼 401/429/500 재시도가 스로틀 게이트를 우회하고(NFR-105 보장 약화), `MAX_RETRIES=3`이 401 재발급·429 대기·500 백오프 전체가 나눠 쓰는 공용 예산이라 여러 실패가 겹치면 일부 유형이 재시도를 못 받고 포기함. 문서 자체의 설계라 이번엔 임의로 재설계하지 않음 — Phase 7 착수 전 재확인 필요
-- **S-1 (Phase 6)**: `fetch_price_history`에서 유효 데이터 부족·조회 실패로 제외된 종목이 `excluded_tickers`로 상류에 전달되지 않음(`api/base.py` Protocol을 `DataFrame`만 반환하도록 그대로 유지했기 때문). `RiskMetrics.excluded_tickers` 필드는 이미 있으므로 Phase 7에서 반환 구조를 확장할지 결정 필요
+- ~~**S-1 (Phase 6)**: `fetch_price_history`에서 유효 데이터 부족·조회 실패로 제외된 종목이 `excluded_tickers`로 상류에 전달되지 않음~~ **Phase 7에서 해결.** `api/base.py` Protocol은 그대로 두고, `services/dashboard_service.py._load_prices`가 "요청 티커 목록 vs 반환 DataFrame 컬럼" diff로 서비스 레이어에서 직접 계산하는 방식으로 처리(Protocol 확장 불필요)
 - **S-5 (Phase 5 S-3, Phase 6에서 재확인 후 유지)**: `internal-error`/`unsupported-symbol`/`stock-not-found`/`invalid-request`/`account-header-required`/`ip-not-allowed`가 여전히 `_CODE_TO_EXCEPTION`에 없음. `.code`가 보존되고 `_request`가 이미 원본 코드 문자열로 재시도를 분기하므로 기능상 문제는 없다고 재확인 — 의도적으로 손대지 않음
 
 ## 알려진 이슈
 - 스모크 테스트 스크립트 콘솔 출력에서 한글 요약 문구가 인코딩 문제로 깨짐 (Windows 콘솔 코드페이지 이슈로 추정). 기능 결과(JSON)에는 영향 없음. 스크립트는 스크래치패드에만 존재하며 커밋 대상 아님
 
 ## 다음 시작 지점
-`docs/TDD_PLAN.md` **Phase 7 (`services/dashboard_service.py`)**부터 진행. `api/toss_client.py`의 `TossSecuritiesClient`(전 메서드 구현 완료, 실계좌로 관문 6 통과)와 `api/mock_client.py`의 `MockBrokerClient`(가격 히스토리는 내부적으로 `TossSecuritiesClient`에 위임)를 그대로 소비한다. Phase 7 착수 시 참고할 것:
-- **classify() 호출 위치**: Phase 3/4/6에 걸쳐 "분류는 services 레이어 책임"으로 일관되게 결정돼 있다. `api/` 계층의 `fetch_portfolio()`들은 `Holding.asset_class`를 항상 `OTHER`(기본값)로 둔 채 반환하므로, Phase 7이 `fetch_stock_meta()` + `classify()`를 조합해 `holding.asset_class`를 채워야 한다. 참고 패턴: `tests/test_mock_client.py`의 `classified_portfolio` fixture(정리 대상으로 이미 표시돼 있었음 — Phase 7에서 이 조합 로직이 서비스로 옮겨가면 그 fixture는 서비스 호출로 교체)
-- **W-5/W-6 (Phase 6, 열린 항목)**: `TossSecuritiesClient._request`의 재시도가 스로틀을 우회하고, 재시도 예산이 실패 유형 간 공유되는 문제. Phase 7에서 여러 단계를 오케스트레이션하며 실제로 재시도가 자주 겹치는 상황(예: 20종목 캔들 루프 중 401+429 동시 발생)이 생기면 이 설계를 재검토할지 결정 필요
-- **S-1 (Phase 6, 열린 항목)**: `fetch_price_history`가 제외 종목 목록을 반환하지 않음. `RiskMetrics.excluded_tickers`(FR-204)를 채우려면 `api/base.py` Protocol 자체를 확장할지, 아니면 로그만으로 충분하다고 볼지 결정 필요
-- W-6(Phase 5, 열린 항목, Phase 6에서도 미해결): NFR-304 사용자 메시지 매핑(API_DESIGN §16)을 `errors.py`에 둘지 `services`/`ui`에 둘지 결정 필요 — Phase 7이 예외를 처음 소비하는 지점이므로 지금 결정해야 함
+`docs/TDD_PLAN.md` **Phase 8 (`ui/` + `app.py`)**부터 진행. `services/dashboard_service.py`의 `DashboardService(settings).load() -> DashboardData`를 `@st.cache_data(ttl=300)`로 감싸 호출하면 된다(COMPONENT_DESIGN §2.3 캐싱 지점). Phase 8 착수 시 참고할 것:
+- **`DashboardData.commentary`는 항상 `None`이다** (Phase 7 결정 2). `ui/ai_banner.py`는 `None`일 때 배너를 숨기거나 규칙 기반 플레이스홀더를 보여주는 조건부 렌더링이 필요하다(DATA_DESIGN §2.8 "P1 항목이 None이면 해당 블록 미렌더링" 원칙과 동일하게 처리)
+- **`DashboardData.warnings`를 화면 어딘가에 표시할 것** — Phase 7까지는 각 단계 실패를 `warnings: list[str]`에만 쌓고 아무도 소비하지 않는다. AT-02/AT-03(폴백 배지) 요구사항을 만족하려면 Phase 8이 이 리스트를 상단 배지로 렌더링해야 한다
+- **daily_pnl_pct 단위 함정 (S-3, Phase 7 열린 항목)**: `portfolio.daily_pnl_rate`를 그대로 넣은 소수비율(예: 0.0141)인데 필드명이 `_pct`다. Phase 8에서 포맷터가 ×100을 빠뜨리거나 이중으로 곱하기 쉽다. 표시 직전 단위를 반드시 확인할 것
+- **W-8 (Phase 7, 열린 항목, 사용자 확인 필요)**: 종목 메타 조회 실패 시 `warnings`에 아무 메시지도 남기지 않는다(COMPONENT_DESIGN §2.2 표가 명시적으로 그렇게 설계함 — ETF/리츠 하위분류가 통째로 사라지는데도 화면에 경고가 없다는 뜻). 경고를 추가할지는 §16 표에 없는 새 문구를 만드는 일이라 사용자 판단 필요
+- **S-1 (Phase 7, 열린 항목)**: `_compute_metrics`와 `_load_benchmark`가 `portfolio_returns`/벤치마크 수익률을 각각 다시 계산한다(중복). 계산 비용보다, 두 곳의 필터 조건이 나중에 갈리면 베타와 차트가 서로 다른 시계열을 쓰게 될 위험이 있다. 우선순위 낮음
+- **S-2 (Phase 7, 열린 항목)**: `ASSET_CLASS_MAP_PATH = "config/asset_class_map.yaml"`이 CWD 상대경로. `streamlit run`을 다른 디렉터리에서 실행하면 조용히 기본 설정(오버라이드·ETF 키워드 없음)으로 폴백한다 — Phase 1 S-1/Phase 4 W-6·W-7과 같은 계열의 문제, 아직 아무 파일도 절대경로로 안 고쳐짐
+- **S-4 (Phase 7, 열린 항목)**: `tests/test_mock_client.py`/`tests/test_correlation.py`의 `classified_portfolio` fixture가 이제 `DashboardService._load_stock_meta`+`_classify`와 로직이 중복된다. state.md가 Phase 4부터 "Phase 7에서 정리 대상"이라 예고했으나 이번에도 손대지 않음(요청 범위 밖)
+- **W-5/W-6 (Phase 6, 열린 항목, Phase 7에서도 미해결)**: `TossSecuritiesClient._request`의 재시도가 스로틀을 우회하고, 재시도 예산이 실패 유형 간 공유되는 문제. Phase 8이 UI를 통해 실제 20종목 캔들 루프를 자주 실행하게 되면 재시도가 겹치는 상황이 실제로 발생할 수 있다 — 재검토할지 결정 필요
 - W-3(Phase 5) 결정에 따라 `BrokerAPIError`/하위 클래스를 raise할 때 메시지는 위치 인자, 에러코드는 `code=` 키워드로 넘길 것 (`RateLimitError("메시지", code="rate-limit-exceeded")`)
+- **커밋 관례 미이행 (Phase 2~7 반복)**: Red/Green 분리 커밋이 계속 안 되고 있다. Phase 7 종료 시점에 최소 1개 커밋은 남길 것

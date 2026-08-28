@@ -9,4 +9,5 @@
 - [Windows atomic-write trap](project-windows-atomic-write-trap.md) — tempfile+os.replace crashes on Windows when the dst is open; the token-cache fix inverts its own failure mode.
 - [Server-controlled sleep values](project-server-controlled-sleep.md) — raw rate-limit headers go straight to time.sleep with no clamp; fixed in throttle.py, regressed in toss_client.py.
 - [Open items carried over](project-open-items-carried-over.md) — state.md's 열린 항목 list predicts the next phase's bugs; the code gets moved verbatim and the bug ships.
+- [FX rate duality](project-fx-rate-duality.md) — service-level fx vs Portfolio.fx_rate diverge → 총자산 6.5x off vs 자산배분 합계; check both in UI phases.
 - [Token single validity (위험1)](project-token-single-validity.md) — 401 refresh discards the new token and re-reads a cache whose writes may silently fail → 3 issuances per request.
